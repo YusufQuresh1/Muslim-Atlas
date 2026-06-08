@@ -1,0 +1,45 @@
+diff --git a/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationView.kt b/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationView.kt
+index 1234567..abcdef0 100644
+--- a/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationView.kt
++++ b/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationView.kt
+@@ -106,9 +106,13 @@ class ExpoMapboxNavigationView(context: Context, appContext: AppContext) :
+     // and gets null. Not set automatically for some reason.
+     // https://github.com/mapbox/mapbox-navigation-android/blob/188d4781b31bb328733eeca593edc8087e38d915/ui-utils/src/main/java/com/mapbox/navigation/ui/utils/internal/lifecycle/ViewLifecycleRegistry.kt#L67
+     init {
+-        this.setViewTreeLifecycleOwner(
+-                appContext.activityProvider?.currentActivity as LifecycleOwner
+-        )
++        // Safe null-check: under New Architecture (Fabric), currentActivity can be null
++        // during view construction. Force-casting null as LifecycleOwner throws
++        // NullPointerException -> InvocationTargetException. Use a safe cast instead.
++        val lifecycleOwner = appContext.activityProvider?.currentActivity as? LifecycleOwner
++        if (lifecycleOwner != null) {
++            this.setViewTreeLifecycleOwner(lifecycleOwner)
++        }
+     }
+ 
+     private var isMuted = false
+diff --git a/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationModule.kt b/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationModule.kt
+index 1234567..abcdef0 100644
+--- a/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationModule.kt
++++ b/android/src/main/java/expo/modules/mapboxnavigation/ExpoMapboxNavigationModule.kt
+@@ -19,13 +19,14 @@
+     Name("ExpoMapboxNavigation")
+ 
+     OnActivityEntersForeground {
+-      (activity as LifecycleOwner).lifecycleScope.launch(Dispatchers.Main) {
++      val currentAct = appContext.activityProvider?.currentActivity ?: return@OnActivityEntersForeground
++      (currentAct as LifecycleOwner).lifecycleScope.launch(Dispatchers.Main) {
+         if (!MapboxNavigationApp.isSetup()) {
+           MapboxNavigationApp.setup {
+-            NavigationOptions.Builder(activity.applicationContext).build()
+-          }
+-        }
+-        MapboxNavigationApp.attach(activity as LifecycleOwner)
++            NavigationOptions.Builder(currentAct.applicationContext).build()
++          }
++        }
++        MapboxNavigationApp.attach(currentAct as LifecycleOwner)
+       }
+     }
+ 
