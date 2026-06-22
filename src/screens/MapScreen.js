@@ -1043,13 +1043,14 @@ export default function MapScreen({ route, navigation }) {
                   key={`pa-${activeCategory}-${item.id || item.place_id || index.toString()}`}
                   id={`pa-${activeCategory}-${item.id || index}`}
                   coordinate={[lng, lat]}
+                  anchor={{ x: 0.5, y: 1.0 }}
                   onSelected={() => openPlaceSheet(item)}
                 >
-                  <View style={styles.markerWrapper}>
-                    <View style={[styles.marker, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]}>
+                  <View style={styles.markerWrapper} collapsable={false}>
+                    <View style={[styles.marker, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]} collapsable={false}>
                       <MaterialCommunityIcons name={activeCategory === 'food' ? 'silverware-fork-knife' : 'mosque'} size={18} color='#fff' />
                     </View>
-                    <View style={[styles.markerStem, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]} />
+                    <View style={[styles.markerStem, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]} collapsable={false} />
                   </View>
                 </Mapbox.PointAnnotation>
               )})}
@@ -1548,7 +1549,13 @@ const styles = StyleSheet.create({
   },
 
   // Mosque/Food markers
-  markerWrapper: { alignItems: 'center', justifyContent: 'flex-start' },
+  markerWrapper: {
+    width: 48,
+    height: 60,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    backgroundColor: 'transparent',
+  },
   marker: {
     width: 48, height: 48, borderRadius: 24,
     backgroundColor: '#1b5e20',
