@@ -1,6 +1,8 @@
-import React, { createContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useEffect, useCallback, useRef } from 'react';
 import * as Location from 'expo-location';
+import { AppState } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { updateAppWidgets } from '../../widget-task-handler';
 
 export const MosqueContext = createContext();
 import { doc, getDoc, setDoc, serverTimestamp, updateDoc, arrayUnion } from 'firebase/firestore';
@@ -45,6 +47,8 @@ export const MosqueProvider = ({ children }) => {
       if (locData?.name) {
         await AsyncStorage.setItem('@cached_location_name', locData.name);
       }
+      // Instantly trigger widget refresh on location changes
+      updateAppWidgets().catch(console.warn);
     } catch (e) {
       console.warn('Failed to save data to cache', e);
     }
@@ -168,44 +172,84 @@ export const MosqueProvider = ({ children }) => {
     }
   };
 
-  const searchHalalFood = async (lat, lng, refLocation = searchOrigin || userLocation, limit = fetchCount, clearPrevious = false) => {
+  const searchHalalFood = async (lat, lng, refLocation = searchOrigin || userLocation, limit = 20, clearPrevious = false) => {
     try {
       if (clearPrevious) {
         setHalalFood([]);
-        // Optional: you might want a separate fetch count if they are kept separate, 
-        // but since both use `fetchCount` globally right now, we can update it:
-        setFetchCount(limit);
       }
       
       const safeLat = Number(lat);
       const safeLng = Number(lng);
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
       
-      const res = await fetch('https://places.googleapis.com/v1/places:searchText', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
-          'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.formattedAddress,places.rating,places.userRatingCount,places.photos',
-        },
-        body: JSON.stringify({
-          textQuery: 'halal food OR halal takeaway OR halal chicken shop',
-          maxResultCount: limit,
-          locationBias: {
-            circle: {
-              center: { latitude: safeLat, longitude: safeLng },
-              radius: 5000.0,
+      // Perform two parallel queries to get a much larger and higher quality list of food spots
+      const [res1, res2] = await Promise.all([
+        fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.formattedAddress,places.rating,places.userRatingCount,places.photos,places.regularOpeningHours,places.types',
+          },
+          body: JSON.stringify({
+            textQuery: 'halal restaurant',
+            maxResultCount: limit,
+            rankPreference: 'DISTANCE',
+            locationBias: {
+              circle: {
+                center: { latitude: safeLat, longitude: safeLng },
+                radius: 5000.0,
+              }
             }
-          }
+          }),
+          signal: controller.signal
         }),
-        signal: controller.signal
-      });
+        fetch('https://places.googleapis.com/v1/places:searchText', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+            'X-Goog-FieldMask': 'places.id,places.displayName,places.location,places.formattedAddress,places.rating,places.userRatingCount,places.photos,places.regularOpeningHours,places.types',
+          },
+          body: JSON.stringify({
+            textQuery: 'halal takeaway OR halal food OR halal kebab OR halal burger',
+            maxResultCount: limit,
+            rankPreference: 'DISTANCE',
+            locationBias: {
+              circle: {
+                center: { latitude: safeLat, longitude: safeLng },
+                radius: 5000.0,
+              }
+            }
+          }),
+          signal: controller.signal
+        })
+      ]);
+      
       clearTimeout(timeoutId);
-      const data = await res.json();
-      if (data.places) {
-        const enriched = data.places.map(p => {
+      
+      const [data1, data2] = await Promise.all([
+        res1.json().catch(() => ({})),
+        res2.json().catch(() => ({}))
+      ]);
+      
+      const places1 = data1.places || [];
+      const places2 = data2.places || [];
+      const combinedPlaces = [...places1, ...places2];
+      
+      // Deduplicate by place ID
+      const uniquePlacesMap = new Map();
+      combinedPlaces.forEach(p => {
+        if (p && p.id) {
+          uniquePlacesMap.set(p.id, p);
+        }
+      });
+      const uniquePlaces = Array.from(uniquePlacesMap.values());
+      
+      if (uniquePlaces.length > 0) {
+        const enriched = uniquePlaces.map(p => {
           const pLat = p.location?.latitude;
           const pLng = p.location?.longitude;
           const refLat = refLocation?.coords?.latitude || lat;
@@ -372,7 +416,7 @@ export const MosqueProvider = ({ children }) => {
       const transit = (transitData.places || []).map((s) => ({
         name: s.displayName?.text,
         distance: Math.round(haversineDistance(lat, lng, s.location.latitude, s.location.longitude)),
-      }));
+      })).sort((a, b) => a.distance - b.distance);
 
       let result;
       if (category === 'mosque') {
@@ -430,68 +474,10 @@ export const MosqueProvider = ({ children }) => {
     setIsRefreshing(true);
 
     try {
-      const cached = await loadCachedData();
-      const lastFetchTime = cached.location?.lastFetchTime || 0;
-
-      const ageHours = (Date.now() - lastFetchTime) / (1000 * 60 * 60);
-
-      // Tier 1: Cooldown (< 60s)
-      if (Date.now() - lastFetchTime < 60000) {
-        console.log("Smart Refresh Tier 1: Cooldown (Skipping)");
-        setIsRefreshing(false);
-        return;
-      }
-
-      // Tier 2: Stale (> 30 days)
-      if (ageHours > 720) {
-        console.log("Smart Refresh Tier 2: Stale Cache (Refetching API)");
-        setFetchCount(10);
-        await Promise.all([
-           searchArea(origin.coords.latitude, origin.coords.longitude, MAX_RADIUS_METERS, origin, 10, true),
-           searchHalalFood(origin.coords.latitude, origin.coords.longitude, origin, 10, true)
-        ]);
-        setIsRefreshing(false);
-        return;
-      }
-
-      if (cached.location && cached.mosques?.length > 0) {
-        const displacement = haversineDistance(
-          origin.coords.latitude, origin.coords.longitude,
-          cached.location.latitude, cached.location.longitude
-        );
-
-        // Tier 3: Micro Move (< 50m)
-        if (displacement < 50) {
-          console.log("Smart Refresh Tier 3: Micro Move < 50m (Skipping)");
-          setIsRefreshing(false);
-          return;
-        }
-
-        // Tier 4: Local Resorting
-        if (displacement >= 50 && displacement < 2000) {
-          console.log(`Smart Refresh Tier 4: Local Resorting (Moved ${Math.round(displacement)}m)`);
-          const resortedMosques = resortCachedItems(cached.mosques, origin.coords.latitude, origin.coords.longitude);
-          const resortedFood = resortCachedItems(cached.halalFood, origin.coords.latitude, origin.coords.longitude);
-
-          setMosques(resortedMosques);
-          if (resortedFood?.length) {
-            setHalalFood(resortedFood);
-            await saveDataToCache(resortedMosques, resortedFood, origin);
-          } else {
-            await saveDataToCache(resortedMosques, cached.halalFood, origin);
-          }
-          
-          setIsRefreshing(false);
-          return;
-        }
-      }
-
-      // Tier 5: Macro Move (> 2000m)
-      console.log("Smart Refresh Tier 5: Macro Move > 2000m (Refetching API)");
       setFetchCount(10);
       await Promise.all([
          searchArea(origin.coords.latitude, origin.coords.longitude, MAX_RADIUS_METERS, origin, 10, true),
-         searchHalalFood(origin.coords.latitude, origin.coords.longitude, origin, 10, true)
+         searchHalalFood(origin.coords.latitude, origin.coords.longitude, origin, 20, true)
       ]);
     } catch (e) {
       console.error('Force Refresh Error:', e);
@@ -499,6 +485,93 @@ export const MosqueProvider = ({ children }) => {
     
     setIsRefreshing(false);
   };
+
+  // ── Re-check location when app comes to foreground ───────────────────────
+  const lastKnownCoords = useRef(null);
+  // Prevents refreshUserLocation from racing with boot init
+  const isInitialized = useRef(false);
+
+  const refreshUserLocation = useCallback(async () => {
+    // Don't run until boot has fully completed — prevents racing with initial GPS fix
+    if (!isInitialized.current) return;
+    try {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+
+      const loc = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => null),
+        new Promise(resolve => setTimeout(() => resolve(null), 8000)),
+      ]);
+
+      if (!loc) return;
+
+      const newLat = loc.coords.latitude;
+      const newLng = loc.coords.longitude;
+
+      // Only update if moved more than 500m from last known position
+      const prev = lastKnownCoords.current;
+      const movedEnough = !prev || haversineDistance(prev.lat, prev.lng, newLat, newLng) > 500;
+
+      lastKnownCoords.current = { lat: newLat, lng: newLng };
+      setUserLocation(loc);
+
+      if (movedEnough) {
+        // Re-geocode location name
+        fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${newLat},${newLng}&key=${GOOGLE_PLACES_API_KEY}`)
+          .then(res => res.json())
+          .then(data => {
+            let localName = null;
+            if (data.status === 'OK' && data.results?.length > 0) {
+              let allComponents = [];
+              for (const result of data.results) {
+                allComponents = allComponents.concat(result.address_components);
+              }
+              const typesToFind = ['neighborhood', 'sublocality_level_1', 'sublocality', 'locality', 'postal_town'];
+              for (const t of typesToFind) {
+                const match = allComponents.find(c => c.types.includes(t));
+                if (match) { localName = match.short_name || match.long_name; break; }
+              }
+            }
+            if (localName) {
+              setSearchLocationName(localName);
+              AsyncStorage.setItem('@cached_location_name', localName).catch(console.warn);
+              AsyncStorage.setItem('@cached_location', JSON.stringify({
+                latitude: newLat,
+                longitude: newLng,
+                lastFetchTime: Date.now(),
+              })).catch(console.warn);
+            } else {
+              Location.reverseGeocodeAsync({ latitude: newLat, longitude: newLng })
+                .then(addresses => {
+                  if (addresses?.length > 0) {
+                    const addr = addresses[0];
+                    const fallbackName = addr.district || addr.city || addr.subregion || addr.region || 'Current Location';
+                    setSearchLocationName(fallbackName);
+                    AsyncStorage.setItem('@cached_location_name', fallbackName).catch(console.warn);
+                  }
+                }).catch(console.warn);
+            }
+            // Always update widget with new coordinates
+            updateAppWidgets().catch(console.warn);
+          }).catch(console.warn);
+      } else {
+        // Moved less than 500m — still update widget in case prayer times shifted
+        updateAppWidgets().catch(console.warn);
+      }
+    } catch (err) {
+      console.warn('refreshUserLocation error:', err);
+    }
+  }, []);
+
+  // Listen for app coming to foreground
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        refreshUserLocation();
+      }
+    });
+    return () => subscription.remove();
+  }, [refreshUserLocation]);
 
   useEffect(() => {
     (async () => {
@@ -510,17 +583,24 @@ export const MosqueProvider = ({ children }) => {
           return;
         }
 
-        // Try last-known first (instant) — safe 500ms window
-        const lastKnown = await Promise.race([
-          Location.getLastKnownPositionAsync().catch(() => null),
-          new Promise(resolve => setTimeout(() => resolve(null), 500)),
-        ]);
-        const loc = lastKnown ?? await Promise.race([
+        // Always fetch a fresh High-accuracy fix so the emulator mock location is respected.
+        // Skipping getLastKnownPositionAsync — it can return a stale network-based position
+        // that bypasses the GPS provider entirely.
+        const loc = await Promise.race([
           Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }).catch(() => null),
           new Promise(resolve => setTimeout(() => resolve(null), 12000)),
         ]);
+
         // Load cached metadata immediately
-        const cached = await loadCachedData();
+        let cached = await loadCachedData();
+        const cacheVer = await AsyncStorage.getItem('@cache_version');
+        if (cacheVer !== 'v2') {
+          await AsyncStorage.removeItem('@cached_mosques');
+          await AsyncStorage.removeItem('@cached_halalfood');
+          await AsyncStorage.removeItem('@cached_location');
+          await AsyncStorage.setItem('@cache_version', 'v2');
+          cached = { mosques: null, halalFood: null, location: null, locationName: null };
+        }
         const lastFetchTime = cached.location?.lastFetchTime || 0;
         const cacheAgeHours = (Date.now() - lastFetchTime) / (1000 * 60 * 60);
         const hasCachedMosques = cached.mosques?.length > 0;
@@ -537,53 +617,51 @@ export const MosqueProvider = ({ children }) => {
         if (loc) {
           setUserLocation(loc);
           
-          // Cost-Saving Reverse Geocoder Cache
-          // If we haven't moved more than 5km from the last cached start, reuse the string!
-          if (displacement < 5000 && cached.locationName) {
-              setSearchLocationName(cached.locationName);
-              // Avoid API hit
-          } else {
-              // We moved significantly. Hit Google Geocoder API.
-              fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.coords.latitude},${loc.coords.longitude}&key=${GOOGLE_PLACES_API_KEY}`)
-                .then(res => res.json())
-                .then(data => {
-                  let localName = null;
-                  if (data.status === 'OK' && data.results && data.results.length > 0) {
-                    let allComponents = [];
-                    for (const res of data.results) {
-                      allComponents = allComponents.concat(res.address_components);
-                    }
-                    const typesToFind = ['neighborhood', 'sublocality_level_1', 'sublocality', 'locality', 'postal_town'];
-                    
-                    for (const t of typesToFind) {
-                      const match = allComponents.find(c => c.types.includes(t));
-                      if (match) {
-                         localName = match.short_name || match.long_name;
-                         break;
-                      }
-                    }
-                  }
-                  if (data.status === 'REQUEST_DENIED') {
-                    console.warn('Geocoding API failed. Ensure "Geocoding API" is enabled in Google Cloud Console.');
-                  }
-                  
-                  if (localName) {
-                    setSearchLocationName(localName);
-                    AsyncStorage.setItem('@cached_location_name', localName).catch(console.warn);
-                  } else {
-                    // Ultimate fallback using local device SDK
-                    Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude })
-                      .then(addresses => {
-                        if (addresses && addresses.length > 0) {
-                          const addr = addresses[0];
-                          const fallbackName = addr.district || addr.city || addr.subregion || addr.region || 'Current Location';
-                          setSearchLocationName(fallbackName);
-                          AsyncStorage.setItem('@cached_location_name', fallbackName).catch(console.warn);
-                        }
-                      }).catch(console.warn);
-                  }
-                }).catch(console.warn);
+          // Show cached name immediately (fast boot), always re-geocode in background
+          // so the precise area name (e.g. "Shoreditch" not just "London") is always accurate.
+          if (cached.locationName) {
+            setSearchLocationName(cached.locationName);
           }
+
+          // Always fire a background geocode — updates name if location has changed at all
+          fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.coords.latitude},${loc.coords.longitude}&key=${GOOGLE_PLACES_API_KEY}`)
+            .then(res => res.json())
+            .then(data => {
+              let localName = null;
+              if (data.status === 'OK' && data.results && data.results.length > 0) {
+                let allComponents = [];
+                for (const res of data.results) {
+                  allComponents = allComponents.concat(res.address_components);
+                }
+                const typesToFind = ['neighborhood', 'sublocality_level_1', 'sublocality', 'locality', 'postal_town'];
+                for (const t of typesToFind) {
+                  const match = allComponents.find(c => c.types.includes(t));
+                  if (match) {
+                    localName = match.short_name || match.long_name;
+                    break;
+                  }
+                }
+              }
+              if (data.status === 'REQUEST_DENIED') {
+                console.warn('Geocoding API failed. Ensure "Geocoding API" is enabled in Google Cloud Console.');
+              }
+
+              if (localName) {
+                setSearchLocationName(localName);
+                AsyncStorage.setItem('@cached_location_name', localName).catch(console.warn);
+              } else {
+                // Fallback using local device SDK
+                Location.reverseGeocodeAsync({ latitude: loc.coords.latitude, longitude: loc.coords.longitude })
+                  .then(addresses => {
+                    if (addresses && addresses.length > 0) {
+                      const addr = addresses[0];
+                      const fallbackName = addr.district || addr.city || addr.subregion || addr.region || 'Current Location';
+                      setSearchLocationName(fallbackName);
+                      AsyncStorage.setItem('@cached_location_name', fallbackName).catch(console.warn);
+                    }
+                  }).catch(console.warn);
+              }
+            }).catch(console.warn);
         }
 
         // If GPS failed but we have a cached position, use it as a fallback location
@@ -629,21 +707,21 @@ export const MosqueProvider = ({ children }) => {
         // No valid cache or location moved significantly — fetch fresh data
         if (loc) {
           console.log('Boot: Location ready. Deferring API data fetch to active screens.');
+          if (displacement >= 2000 || cacheAgeHours >= 720) {
+            setMosques([]);
+            setHalalFood([]);
+          }
         } else if (!hasCachedMosques) {
-          console.warn('Boot: No location and no cache — using London fallback. Deferring fetch.');
-          // Fallback to central London if everything fails so the app is not empty
-          const fallbackLoc = {
-            coords: { latitude: 51.5074, longitude: -0.1278, accuracy: 0 },
-            timestamp: Date.now()
-          };
-          setUserLocation(fallbackLoc);
-          setSearchLocationName("London (Fallback)");
+          // GPS failed and no cached data — show a proper error rather than faking a location
+          console.warn('Boot: No location and no cache — cannot determine location.');
+          setError('Unable to determine your location. Please check location permissions and try again.');
         }
       } catch (err) {
         console.error('Global MosqueContext init error:', err);
         setError('Failed to initialize location.');
       } finally {
         setIsLoading(false);
+        isInitialized.current = true; // Allow AppState listener to run after this point
       }
     })();
   }, []);
@@ -681,6 +759,7 @@ export const MosqueProvider = ({ children }) => {
       fetchSingleMosque, geocodePlace,
       fetchMosqueDeepData, fetchPlaceDeepData, appendParkingToCache,
       fetchPlaceFromFirebase, getCrowdsourcedData,
+      searchHalalFood,
     }}>
       {children}
     </MosqueContext.Provider>

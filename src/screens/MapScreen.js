@@ -14,6 +14,8 @@ import RoutePreviewOverlay from '../components/RoutePreviewOverlay';
 import LocationSearchModal from '../components/LocationSearchModal';
 import { useTheme } from '../context/ThemeContext';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { calculatePrayerTimes } from '../utils/prayerEngine';
+import { usePrayerSettings } from '../context/PrayerSettingsContext';
 
 const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
 const SEARCH_RADIUS_METERS = 5000;
@@ -89,7 +91,7 @@ export default function MapScreen({ route, navigation }) {
     searchArea, loadMoreMosques, fetchCount,
     searchOrigin, setSearchOrigin, searchLocationName, setSearchLocationName,
     fetchSingleMosque, geocodePlace,
-    isRefreshing, forceRefreshData
+    isRefreshing, forceRefreshData, searchHalalFood
   } = React.useContext(MosqueContext);
 
   const { theme } = useTheme();
@@ -191,20 +193,26 @@ export default function MapScreen({ route, navigation }) {
   const lastFetchedLocation = useRef(null);
   const hasInitialCameraSettledRef = useRef(false);
 
-  // Set initial fetch coordinate to prevent immediate drift prompt
+
+  // Update camera whenever location changes, as long as the user hasn't manually panned away.
+  // Using followUser as the gate instead of a one-shot ref, so a corrected GPS fix
+  // (e.g. emulator mock location arriving after a stale last-known) still moves the camera.
   useEffect(() => {
-    if (location && !hasInitialCameraSettledRef.current) {
+    if (!location || !followUser) return;
+    const isFirst = !hasInitialCameraSettledRef.current;
+    if (isFirst) {
+      // First fix — mark settled and record fetch origin
       hasInitialCameraSettledRef.current = true;
       lastFetchedLocation.current = { lat: location.coords.latitude, lng: location.coords.longitude };
-      setTimeout(() => {
-        cameraRef.current?.setCamera({
-          centerCoordinate: [location.coords.longitude, location.coords.latitude],
-          zoomLevel: 13,
-          animationDuration: 1500,
-        });
-      }, 500);
     }
-  }, [location]);
+    cameraRef.current?.setCamera({
+      centerCoordinate: [location.coords.longitude, location.coords.latitude],
+      zoomLevel: 13,
+      animationDuration: isFirst ? 1500 : 800,
+    });
+  }, [location, followUser]);
+
+
 
   // Prayer Logic
   const [prayerTimes, setPrayerTimes] = useState(null);
@@ -356,28 +364,133 @@ export default function MapScreen({ route, navigation }) {
     setNextPrayer({ name: nextName, timeObj: nextDateObj });
   }, [currentTime, prayerTimes]);
 
-  // ── Mosque-Specific Prayer Times Fetch ─────────────────────────────────────
+  // ── Mosque-Specific Prayer Times Calculation (Local) ──────────────────────
+  const { asrMethod, prayerOffsets, calculationMethod, highLatitudeRule } = usePrayerSettings();
+
   useEffect(() => {
     if (!selectedMosque) {
       setMosquePrayerTimes(null);
-      setMosquePrayerLoading(false);
       return;
     }
-    setMosquePrayerLoading(true);
-    (async () => {
-      try {
-        const res = await fetch(`https://api.aladhan.com/v1/timings?latitude=${selectedMosque.location.latitude}&longitude=${selectedMosque.location.longitude}&method=2`);
-        const data = await res.json();
-        if (data?.data?.timings) {
-          setMosquePrayerTimes(data.data.timings);
-        }
-      } catch (err) {
-        console.error('Mosque prayer fetch error in MapScreen:', err);
-      } finally {
-        setMosquePrayerLoading(false);
+    const times = calculatePrayerTimes(
+      selectedMosque.location.latitude,
+      selectedMosque.location.longitude,
+      currentTime,
+      { asrMethod, prayerOffsets, calculationMethod, highLatitudeRule }
+    );
+    setMosquePrayerTimes(times);
+  }, [selectedMosque?.id, asrMethod, prayerOffsets, calculationMethod, highLatitudeRule, currentTime.getDate()]);
+
+  // Auto-fetch mosques and halal food when location becomes ready
+  useEffect(() => {
+    if (!location) return;
+    const lat = searchOrigin?.coords?.latitude ?? location.coords.latitude;
+    const lng = searchOrigin?.coords?.longitude ?? location.coords.longitude;
+    const origin = searchOrigin ?? location;
+
+    if (mosques.length === 0 && !loading) {
+      searchArea(lat, lng, SEARCH_RADIUS_METERS, origin, 10, false);
+    }
+    if (halalFood.length === 0 && !loading) {
+      searchHalalFood(lat, lng, origin, 10, false);
+    }
+  }, [location, searchOrigin, mosques.length, halalFood.length, searchArea, searchHalalFood]);
+
+  // Dynamic density-based zoom: zoom in closer if pins are clustered near the center
+  useEffect(() => {
+    if (isPreviewingRoute || selectedMosque || !cameraRef.current || !displayData || displayData.length === 0) return;
+
+    const origin = searchOrigin?.coords || location?.coords;
+    if (!origin) return;
+    const originLng = origin.longitude;
+    const originLat = origin.latitude;
+
+    // Filter to closest 5 pins
+    const localPins = displayData.slice(0, 5);
+
+    // If the closest pin is further than 5km, center on user at zoom 13
+    const nearest = localPins[0];
+    const nearestLat = nearest.location?.latitude || nearest.geometry?.location?.lat;
+    const nearestLng = nearest.location?.longitude || nearest.geometry?.location?.lng;
+    
+    if (typeof nearestLat === 'number' && typeof nearestLng === 'number') {
+      const distToNearest = haversineDistance(originLat, originLng, nearestLat, nearestLng);
+      if (distToNearest > 5000) {
+        cameraRef.current.setCamera({
+          centerCoordinate: [originLng, originLat],
+          zoomLevel: 13,
+          animationDuration: 1000,
+          animationMode: 'easeTo',
+        });
+        return;
       }
-    })();
-  }, [selectedMosque]);
+    }
+
+    // ── Density Detection & Clustering ──
+    // Determine if the pins are clustered closely together, indicating high density.
+    // If so, we should focus on the cluster and apply an optimal minimum box span (zoom ~17-18)
+    // so pins do not overlap but are also not street-view level 20.
+    const pinsWithDistance = localPins.map(p => {
+      const lat = p.location?.latitude || p.geometry?.location?.lat;
+      const lng = p.location?.longitude || p.geometry?.location?.lng;
+      const dist = (typeof lat === 'number' && typeof lng === 'number')
+        ? haversineDistance(nearestLat, nearestLng, lat, lng)
+        : Infinity;
+      return { pin: p, lat, lng, dist };
+    }).filter(p => p.dist !== Infinity);
+
+    // If there is at least one other pin within 400 meters of the nearest pin,
+    // we classify it as a dense cluster.
+    const denseClusterPins = pinsWithDistance.filter(p => p.dist <= 400);
+    const isDense = denseClusterPins.length >= 2;
+
+    // To prevent far-away pins (outliers) from pulling the zoom out and causing
+    // the cluster to overlap, we fit bounds only to the cluster if it's dense.
+    const targetPins = isDense ? denseClusterPins : pinsWithDistance;
+
+    // Include user's location coordinate so the dot is always in frame
+    const coords = [
+      [originLng, originLat],
+      ...targetPins.map(p => [p.lng, p.lat])
+    ];
+
+    if (coords.length > 0) {
+      let maxLat = Math.max(...coords.map(c => c[1]));
+      let minLat = Math.min(...coords.map(c => c[1]));
+      let maxLng = Math.max(...coords.map(c => c[0]));
+      let minLng = Math.min(...coords.map(c => c[0]));
+
+      // If dense, use a minBoxSpan that keeps the zoom around 17.5 - 18.0 (approx 0.0012)
+      // Otherwise, use 0.002 to keep the zoom around 16.5 - 17.0.
+      const minBoxSpan = isDense ? 0.0012 : 0.002;
+      const latDiff = maxLat - minLat;
+      const lngDiff = maxLng - minLng;
+
+      if (latDiff < minBoxSpan) {
+        const pad = (minBoxSpan - latDiff) / 2;
+        maxLat += pad;
+        minLat -= pad;
+      }
+      if (lngDiff < minBoxSpan) {
+        const pad = (minBoxSpan - lngDiff) / 2;
+        maxLng += pad;
+        minLng -= pad;
+      }
+
+      cameraRef.current.setCamera({
+        bounds: {
+          ne: [maxLng, maxLat],
+          sw: [minLng, minLat],
+          paddingTop: 120,
+          paddingBottom: 280,
+          paddingLeft: 80,
+          paddingRight: 80,
+        },
+        animationDuration: 1000,
+        animationMode: 'easeTo',
+      });
+    }
+  }, [activeCategory, displayData, isPreviewingRoute, selectedMosque?.id, viewMode]);
 
   // Compute Next Prayer for the explicitly selected Mosque
   useEffect(() => {
@@ -421,12 +534,17 @@ export default function MapScreen({ route, navigation }) {
   }, [currentTime, mosquePrayerTimes]);
 
   // ── Camera State Tracking (for restore on close) ───────────────────────────
+  const isUserInteracting = useRef(false);
+
   const handleCameraChanged = useCallback((state) => {
     if (state?.properties?.center) {
       liveCameraState.current = {
         centerCoordinate: state.properties.center,
         zoomLevel: state.properties.zoom ?? 14,
       };
+    }
+    if (state?.gestures?.isGestureActive) {
+      isUserInteracting.current = true;
     }
   }, []);
 
@@ -445,13 +563,17 @@ export default function MapScreen({ route, navigation }) {
 
     if (!lastFetchedLocation.current) return;
     
-    const moved = haversineDistance(
-      lastFetchedLocation.current.lat, lastFetchedLocation.current.lng, lat, lng,
-    );
-    
-    // Suggest refreshing if user drags map 3km away from last hit
-    if (moved > 3000) {
-      setShowSearchButton(true);
+    // Only show "Search this area" button if the map was manually dragged/zoomed by the user
+    if (isUserInteracting.current) {
+      const moved = haversineDistance(
+        lastFetchedLocation.current.lat, lastFetchedLocation.current.lng, lat, lng,
+      );
+      
+      // Suggest refreshing if user drags map 3km away from last hit
+      if (moved > 3000) {
+        setShowSearchButton(true);
+      }
+      isUserInteracting.current = false; // Reset gesture flag
     }
   }, [location]);
 
@@ -502,9 +624,7 @@ export default function MapScreen({ route, navigation }) {
   }, []);
 
   // ── Marker tap via ShapeSource.onPress ─────────────────────────────────────
-  const openPlaceSheet = useCallback((indexStr) => {
-    const index = parseInt(indexStr, 10);
-    const fullPlace = displayData[index];
+  const openPlaceSheet = useCallback((fullPlace) => {
     console.log('Opening Sheet for:', fullPlace?.displayName?.text || fullPlace?.name);
 
     if (!fullPlace || !fullPlace.location) return;
@@ -528,7 +648,7 @@ export default function MapScreen({ route, navigation }) {
     setSelectedMosque(fullPlace);
     const targetIndex = viewMode === 'list' ? 3 : 1;
     bottomSheetRef.current?.snapToIndex(targetIndex);
-  }, [displayData, viewMode]);
+  }, [viewMode]);
 
   // ── Auto-open Deeplinked Place ─────────────────────────────────────────────
   useEffect(() => {
@@ -552,7 +672,7 @@ export default function MapScreen({ route, navigation }) {
            bottomSheetRef.current?.close();
         } else {
            // Normal open-sheet mode
-           openPlaceSheet(index);
+           openPlaceSheet(displayData[index]);
         }
       }
     }
@@ -564,9 +684,9 @@ export default function MapScreen({ route, navigation }) {
     if (!props || !props.placeId) return;
     
     // Find matching index in currently active dataset by ID
-    const matchIndex = displayData.findIndex(item => item.id === props.placeId || item.place_id === props.placeId);
-    if (matchIndex !== -1) {
-      openPlaceSheet(matchIndex);
+    const match = displayData.find(item => item.id === props.placeId || item.place_id === props.placeId);
+    if (match) {
+      openPlaceSheet(match);
     }
   }, [displayData, openPlaceSheet]);
 
@@ -785,7 +905,7 @@ export default function MapScreen({ route, navigation }) {
     return (
       <TouchableOpacity
         style={[styles.uberCard, { backgroundColor: theme.card }]}
-        onPress={() => openPlaceSheet(displayData.findIndex(m => m.id === item.id))}
+        onPress={() => openPlaceSheet(item)}
         activeOpacity={0.7}
       >
         {photoUrl ? (
@@ -852,11 +972,11 @@ export default function MapScreen({ route, navigation }) {
               }}
               activeOpacity={0.8}
             >
-              <MaterialCommunityIcons name='mosque' size={16} color={activeCategory === 'mosque' ? '#fff' : theme.text} style={styles.toggleSegmentIcon} />
+              <MaterialCommunityIcons name='mosque' size={20} color={activeCategory === 'mosque' ? '#fff' : theme.text} style={[styles.toggleSegmentIcon, activeCategory === 'mosque' && styles.toggleSegmentIconActive]} />
             </TouchableOpacity>
             
             <TouchableOpacity
-              style={[styles.categoryToggleSegment, activeCategory === 'food' && [styles.toggleSegmentActive, { backgroundColor: theme.tint }]]}
+              style={[styles.categoryToggleSegment, activeCategory === 'food' && [styles.toggleSegmentActive, { backgroundColor: '#B5651D' }]]}
               onPress={() => {
                 setActiveCategory('food');
                 setSelectedMosque(null);
@@ -864,133 +984,124 @@ export default function MapScreen({ route, navigation }) {
               }}
               activeOpacity={0.8}
             >
-              <Text style={[styles.toggleSegmentIcon, activeCategory === 'food' && styles.toggleSegmentIconActive]}>🍴</Text>
+              <MaterialCommunityIcons name='silverware-fork-knife' size={20} color={activeCategory === 'food' ? '#fff' : theme.text} style={[styles.toggleSegmentIcon, activeCategory === 'food' && styles.toggleSegmentIconActive]} />
             </TouchableOpacity>
           </View>
         </View>
       )}
 
-      {/* ── CONDITIONAL MAIN VIEW: MAP ── */}
-      {!isNavigating && viewMode === 'map' && (
-        <Mapbox.MapView
-          ref={mapRef}
-          style={styles.map}
-          styleURL={mapStyleUrl}
-          logoEnabled={false}
-          compassEnabled={false}
-          scaleBarEnabled={false}
-          onMapIdle={handleMapIdle}
-          onCameraChanged={handleCameraChanged}
-          onPress={(feature) => console.log('[MapScreen] Global MapView tapped! Coordinates:', feature?.geometry?.coordinates)}
-        >
-          <Mapbox.Camera
-            ref={cameraRef}
-            defaultSettings={{
-              centerCoordinate: searchOrigin
-                ? [searchOrigin.coords.longitude, searchOrigin.coords.latitude]
-                : [location.coords.longitude, location.coords.latitude],
-              zoomLevel: 13,
-            }}
-          />
-
-          <Mapbox.UserLocation visible={true} />
-
-          <Mapbox.ShapeSource
-            key={`places-source-${activeCategory}`}
-            id={`places-source-${activeCategory}`}
-            shape={displayFeatureCollection}
-            onPress={handleShapePress}
-            hitbox={{ width: 50, height: 50 }}
+      {/* ── MAIN VIEW: MAP ── */}
+      {!isNavigating && (
+        <View style={viewMode === 'map' ? { flex: 1 } : { display: 'none' }}>
+          <Mapbox.MapView
+            ref={mapRef}
+            style={styles.map}
+            styleURL={mapStyleUrl}
+            logoEnabled={false}
+            compassEnabled={false}
+            scaleBarEnabled={false}
+            onMapIdle={handleMapIdle}
+            onCameraChanged={handleCameraChanged}
+            onPress={(feature) => console.log('[MapScreen] Global MapView tapped! Coordinates:', feature?.geometry?.coordinates)}
           >
-            {/* Transparent CircleLayer serves as a native hit area for the ShapeSource. */}
-            <Mapbox.CircleLayer
-              id={`placesTouchCircles-${activeCategory}`}
-              style={{ 
-                circleColor: 'rgba(0,0,0,0)',
-                circleRadius: 40,
-                circleOpacity: 0
+            <Mapbox.Camera
+              ref={cameraRef}
+              defaultSettings={{
+                centerCoordinate: searchOrigin
+                  ? [searchOrigin.coords.longitude, searchOrigin.coords.latitude]
+                  : [location.coords.longitude, location.coords.latitude],
+                zoomLevel: 13,
               }}
             />
-          </Mapbox.ShapeSource>
 
-          {/* Using MarkerView for custom React Native UI components! 
-              Capped at top 20 nearest places to completely eliminate Android map lag
-              while perfectly preserving standard React Native UI rendering without native clipping bugs. */}
-          {(isPreviewingRoute ? (displayData || []).filter(m => m.id === selectedMosque?.id) : (displayData || []))
-            .filter(item => {
-              const lng = item.location?.longitude || item.geometry?.location?.lng;
-              const lat = item.location?.latitude || item.geometry?.location?.lat;
-              return typeof lng === 'number' && typeof lat === 'number' && !isNaN(lng) && !isNaN(lat);
-            })
-            .slice(0, 20)
-            .map((item, index) => {
-              const lng = item.location?.longitude || item.geometry?.location?.lng;
-              const lat = item.location?.latitude || item.geometry?.location?.lat;
-              const globalIndex = (displayData || []).indexOf(item);
+            <Mapbox.UserLocation visible={true} />
 
-              return (
+            <Mapbox.ShapeSource
+              key={`places-source-${activeCategory}`}
+              id={`places-source-${activeCategory}`}
+              shape={displayFeatureCollection}
+              onPress={handleShapePress}
+              hitbox={{ width: 44, height: 44 }}
+            />
+
+            {/* Using MarkerView for custom React Native UI components! 
+                Capped at top 20 nearest places to completely eliminate Android map lag
+                while perfectly preserving standard React Native UI rendering without native clipping bugs. */}
+            {(isPreviewingRoute ? (displayData || []).filter(m => m.id === selectedMosque?.id) : (displayData || []))
+              .filter(item => {
+                const lng = item.location?.longitude || item.geometry?.location?.lng;
+                const lat = item.location?.latitude || item.geometry?.location?.lat;
+                return typeof lng === 'number' && typeof lat === 'number' && !isNaN(lng) && !isNaN(lat);
+              })
+              .slice(0, 20)
+              .map((item, index) => {
+                const lng = item.location?.longitude || item.geometry?.location?.lng;
+                const lat = item.location?.latitude || item.geometry?.location?.lat;
+
+                return (
+                <Mapbox.MarkerView
+                  key={`mv-${activeCategory}-${item.id || item.place_id || index.toString()}`}
+                  id={`mv-${activeCategory}-${item.id || index}`}
+                  coordinate={[lng, lat]}
+                  allowOverlap
+                >
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => openPlaceSheet(item)}
+                    style={styles.markerWrapper}
+                  >
+                    <View style={[styles.marker, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]}>
+                      <MaterialCommunityIcons name={activeCategory === 'food' ? 'silverware-fork-knife' : 'mosque'} size={18} color='#fff' />
+                    </View>
+                    <View style={[styles.markerStem, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]} />
+                  </TouchableOpacity>
+                </Mapbox.MarkerView>
+              )})}
+
+            {/* Drive/transit route line */}
+            {routeGeoJSON && (
+              <Mapbox.ShapeSource id="routeSource" shape={routeGeoJSON}>
+                <Mapbox.LineLayer id="routeCasing" style={{ lineColor: '#fff', lineWidth: 9, lineCap: 'round', lineJoin: 'round' }} />
+                <Mapbox.LineLayer
+                  id="routeLine"
+                  style={{
+                    // Blue when driving to a car park or transit; green for direct walk/drive to mosque
+                    lineColor: activeParkingLot ? '#1565C0' : (selectedTransportMode === 'transit' ? '#1565C0' : '#2e7d32'),
+                    lineWidth: 5, lineCap: 'round', lineJoin: 'round',
+                    lineDasharray: selectedTransportMode === 'transit' ? [2, 1.5] : [],
+                  }}
+                />
+              </Mapbox.ShapeSource>
+            )}
+
+            {/* Walk route: car park → mosque (dashed green) */}
+            {walkRouteGeoJSON && (
+              <Mapbox.ShapeSource id="walkRouteSource" shape={walkRouteGeoJSON}>
+                <Mapbox.LineLayer id="walkRouteCasing" style={{ lineColor: '#fff', lineWidth: 7, lineCap: 'round', lineJoin: 'round' }} />
+                <Mapbox.LineLayer
+                  id="walkRouteLine"
+                  style={{ lineColor: '#2e7d32', lineWidth: 4, lineCap: 'round', lineJoin: 'round', lineDasharray: [0, 2] }}
+                />
+              </Mapbox.ShapeSource>
+            )}
+
+            {/* Car park marker */}
+            {activeParkingLot && (
               <Mapbox.MarkerView
-                key={`mv-${activeCategory}-${item.id || item.place_id || index.toString()}`}
-                id={`mv-${activeCategory}-${item.id || index}`}
-                coordinate={[lng, lat]}
+                id="parking-marker"
+                coordinate={[activeParkingLot.lng, activeParkingLot.lat]}
                 allowOverlap
               >
-                <TouchableOpacity 
-                  activeOpacity={0.7}
-                  onPress={() => openPlaceSheet(globalIndex)} 
-                  style={styles.markerWrapper}
-                >
-                  <View style={[styles.marker, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]}>
-                    <MaterialCommunityIcons name={activeCategory === 'food' ? 'silverware-fork-knife' : 'mosque'} size={18} color='#fff' />
+                <View style={styles.markerWrapper}>
+                  <View style={[styles.marker, { backgroundColor: '#1565C0' }]}>
+                    <MaterialCommunityIcons name='parking' size={18} color='#fff' />
                   </View>
-                  <View style={[styles.markerStem, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]} />
-                </TouchableOpacity>
-              </Mapbox.MarkerView>
-            )})}
-
-          {/* Drive/transit route line */}
-          {routeGeoJSON && (
-            <Mapbox.ShapeSource id="routeSource" shape={routeGeoJSON}>
-              <Mapbox.LineLayer id="routeCasing" style={{ lineColor: '#fff', lineWidth: 9, lineCap: 'round', lineJoin: 'round' }} />
-              <Mapbox.LineLayer
-                id="routeLine"
-                style={{
-                  // Blue when driving to a car park or transit; green for direct walk/drive to mosque
-                  lineColor: activeParkingLot ? '#1565C0' : (selectedTransportMode === 'transit' ? '#1565C0' : '#2e7d32'),
-                  lineWidth: 5, lineCap: 'round', lineJoin: 'round',
-                  lineDasharray: selectedTransportMode === 'transit' ? [2, 1.5] : [],
-                }}
-              />
-            </Mapbox.ShapeSource>
-          )}
-
-          {/* Walk route: car park → mosque (dashed green) */}
-          {walkRouteGeoJSON && (
-            <Mapbox.ShapeSource id="walkRouteSource" shape={walkRouteGeoJSON}>
-              <Mapbox.LineLayer id="walkRouteCasing" style={{ lineColor: '#fff', lineWidth: 7, lineCap: 'round', lineJoin: 'round' }} />
-              <Mapbox.LineLayer
-                id="walkRouteLine"
-                style={{ lineColor: '#2e7d32', lineWidth: 4, lineCap: 'round', lineJoin: 'round', lineDasharray: [0, 2] }}
-              />
-            </Mapbox.ShapeSource>
-          )}
-
-          {/* Car park marker */}
-          {activeParkingLot && (
-            <Mapbox.MarkerView
-              id="parking-marker"
-              coordinate={[activeParkingLot.lng, activeParkingLot.lat]}
-              allowOverlap
-            >
-              <View style={styles.markerWrapper}>
-                <View style={[styles.marker, { backgroundColor: '#1565C0' }]}>
-                  <MaterialCommunityIcons name='parking' size={18} color='#fff' />
+                  <View style={[styles.markerStem, { backgroundColor: '#1565C0' }]} />
                 </View>
-                <View style={[styles.markerStem, { backgroundColor: '#1565C0' }]} />
-              </View>
-            </Mapbox.MarkerView>
-          )}
-        </Mapbox.MapView>
+              </Mapbox.MarkerView>
+            )}
+          </Mapbox.MapView>
+        </View>
       )}
 
       {/* ── DIRECTIONS MODE: transparent overlay over the existing map ── */}
@@ -1062,6 +1173,7 @@ export default function MapScreen({ route, navigation }) {
               />
             }
             ListFooterComponent={() => {
+              if (activeCategory === 'food') return null;
               if (fetchCount >= 20) return null;
               return (
                 <View style={styles.loadMoreContainer}>
@@ -1106,7 +1218,7 @@ export default function MapScreen({ route, navigation }) {
               onPress={() => setViewMode('map')}
               activeOpacity={0.8}
             >
-              <Ionicons name='map-outline' size={16} color={viewMode === 'map' ? '#fff' : theme.text} style={styles.toggleSegmentIcon} />
+              <Ionicons name='map-outline' size={20} color={viewMode === 'map' ? '#fff' : theme.text} style={[styles.toggleSegmentIcon, viewMode === 'map' && styles.toggleSegmentIconActive]} />
             </TouchableOpacity>
             
             <TouchableOpacity
@@ -1114,7 +1226,7 @@ export default function MapScreen({ route, navigation }) {
               onPress={() => setViewMode('list')}
               activeOpacity={0.8}
             >
-              <Text style={[styles.toggleSegmentIcon, viewMode === 'list' && styles.toggleSegmentIconActive]}>📋</Text>
+              <Ionicons name="list-outline" size={20} color={viewMode === 'list' ? '#fff' : theme.text} style={[styles.toggleSegmentIcon, viewMode === 'list' && styles.toggleSegmentIconActive]} />
             </TouchableOpacity>
           </View>
         </View>
@@ -1287,7 +1399,7 @@ const styles = StyleSheet.create({
   },
   toggleSegmentIcon: {
     fontSize: 18,
-    opacity: 0.4,
+    opacity: 0.55,
   },
   toggleSegmentIconActive: {
     opacity: 1.0,

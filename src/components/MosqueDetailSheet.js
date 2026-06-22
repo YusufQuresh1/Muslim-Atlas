@@ -64,7 +64,7 @@ const MosqueDetailSheet = React.forwardRef(
     mosquePrayerLoading,
     setViewMode,
   }, ref) => {
-    const snapPoints = useMemo(() => ['25%', '50%', '90%', '100%'], []);
+    const snapPoints = useMemo(() => ['25%', '60%', '90%', '100%'], []);
     const insets = useSafeAreaInsets();
     const { fetchPlaceDeepData, fetchPlaceFromFirebase, getCrowdsourcedData, setSearchOrigin, setSearchLocationName, searchArea } = useContext(MosqueContext);
     const { theme } = useTheme();
@@ -81,7 +81,7 @@ const MosqueDetailSheet = React.forwardRef(
     const crowdsourcedData = useMemo(() => {
       if (!mosque?.id) return null;
       return getCrowdsourcedData(mosque.id);
-    }, [mosque, getCrowdsourcedData]);
+    }, [mosque?.id, getCrowdsourcedData]);
 
     useEffect(() => {
       if (mosque?.id) {
@@ -98,7 +98,7 @@ const MosqueDetailSheet = React.forwardRef(
         mosque.location.latitude,
         mosque.location.longitude,
       );
-    }, [mosque, userLocation]);
+    }, [mosque?.location?.latitude, mosque?.location?.longitude, userLocation]);
 
     // ── Deep Cache: Single fetch for Details + Transit + Halal Food ──
     useEffect(() => {
@@ -114,13 +114,14 @@ const MosqueDetailSheet = React.forwardRef(
       fetchPlaceDeepData(mosque, activeCategory).then((deepData) => {
         if (deepData) {
           setDetails(deepData.details ?? null);
-          setNearbyTransit(deepData.transit ?? []);
+          const sortedTransit = [...(deepData.transit ?? [])].sort((a, b) => (a.distance || 0) - (b.distance || 0));
+          setNearbyTransit(sortedTransit);
           // Use 'food' field when viewing a mosque, 'nearbyMosques' when viewing food
           setHalalPlaces(activeCategory === 'mosque' ? (deepData.food ?? []) : (deepData.nearbyMosques ?? []));
         }
         setDeepLoading(false);
       });
-    }, [mosque, activeCategory, fetchPlaceDeepData]);
+    }, [mosque?.id, activeCategory, fetchPlaceDeepData]);
 
     // ── Fetch mosque photo (from object, no API call needed) ──
     useEffect(() => {
@@ -131,7 +132,7 @@ const MosqueDetailSheet = React.forwardRef(
       setPhotoUri(
         `https://places.googleapis.com/v1/${mosque.photos[0].name}/media?maxWidthPx=400&key=${GOOGLE_PLACES_API_KEY}`,
       );
-    }, [mosque]);
+    }, [mosque?.id]);
 
     // ── Handlers ──
     const handleNavigate = useCallback(() => {
@@ -195,6 +196,11 @@ const MosqueDetailSheet = React.forwardRef(
       return PRAYERS[activeIdx];
     }, [nextPrayer]);
 
+    const isMosqueCTA = activeCategory === 'mosque';
+    const ctaBgColor = isMosqueCTA ? '#B5651D' : '#059669';
+    const ctaBorderColor = isMosqueCTA ? '#9E5414' : '#047857';
+    const ctaColor = '#ffffff';
+
     // Always render BottomSheet so the ref is valid before mosque is selected.
     // The ref would be null if we do early return null, making snapToIndex fail.
     return (
@@ -205,15 +211,15 @@ const MosqueDetailSheet = React.forwardRef(
         topInset={insets.top}
         onChange={handleSheetChange}
         enablePanDownToClose={true}
-        backgroundStyle={styles.sheetBackground}
-        handleIndicatorStyle={styles.handleIndicator}
+        backgroundStyle={[styles.sheetBackground, { backgroundColor: theme.card }]}
+        handleIndicatorStyle={[styles.handleIndicator, { backgroundColor: theme.border }]}
       >
         <BottomSheetScrollView contentContainerStyle={styles.contentContainer}>
           {mosque ? (<>
           {/* ── Header ── */}
           <View style={styles.header}>
             <View style={styles.headerLeft}>
-              <Text style={styles.mosqueName} numberOfLines={2}>
+              <Text style={[styles.mosqueName, { color: theme.text }]} numberOfLines={2}>
                 {mosque.displayName.text}
               </Text>
               
@@ -221,13 +227,13 @@ const MosqueDetailSheet = React.forwardRef(
                 {mosque.rating && (
                   <>
                     <Ionicons name="star" size={14} color="#fbc02d" />
-                    <Text style={styles.ratingText}>
+                    <Text style={[styles.ratingText, { color: theme.text }]}>
                       {mosque.rating.toFixed(1)}
                     </Text>
                   </>
                 )}
                 {mosque.userRatingCount && (
-                  <Text style={styles.ratingCount}>
+                  <Text style={[styles.ratingCount, { color: theme.subText }]}>
                     ({mosque.userRatingCount} reviews)
                   </Text>
                 )}
@@ -235,14 +241,18 @@ const MosqueDetailSheet = React.forwardRef(
                   <View
                     style={[
                       styles.statusBadge,
-                      isOpenNow ? styles.openBadge : styles.closedBadge,
+                      isOpenNow 
+                        ? { backgroundColor: theme.mode === 'dark' ? 'rgba(74, 222, 128, 0.2)' : '#e8f5e9' } 
+                        : { backgroundColor: theme.mode === 'dark' ? 'rgba(239, 68, 68, 0.2)' : '#fce4ec' },
                       { marginLeft: 8, paddingVertical: 2, paddingHorizontal: 8 }
                     ]}
                   >
                     <Text
                       style={[
                         styles.statusText,
-                        isOpenNow ? styles.openBadgeText : styles.closedBadgeText,
+                        isOpenNow 
+                          ? { color: theme.mode === 'dark' ? '#4ade80' : '#2e7d32' } 
+                          : { color: theme.mode === 'dark' ? '#f87171' : '#c62828' },
                       ]}
                     >
                       {isOpenNow ? 'Open Now' : 'Closed'}
@@ -252,51 +262,59 @@ const MosqueDetailSheet = React.forwardRef(
               </View>
             </View>
             <View style={styles.headerRight}>
-              <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-                <Text style={styles.closeBtnText}>✕</Text>
+              <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: theme.chipBg }]}>
+                <Text style={[styles.closeBtnText, { color: theme.text }]}>✕</Text>
               </TouchableOpacity>
             </View>
           </View>
 
           {/* ── Address (under name) ── */}
-          <Text style={styles.addressText}>
-            <Ionicons name="location-sharp" size={14} color={theme.primary} /> {formatDistance(distance)} • {mosque.formattedAddress}
+          <Text style={[styles.addressText, { color: theme.subText }]}>
+            <Ionicons name="location-sharp" size={14} color="#6366F1" /> {formatDistance(distance)} • {mosque.formattedAddress}
           </Text>
-
+ 
           {/* ── Quick Amenities Row ── */}
           {activeCategory === 'mosque' && crowdsourcedData && (
             <View style={styles.quickAmenitiesRow}>
               {crowdsourcedData.hasWomens && (
-                <View style={styles.amenityChip}>
-                  <Text style={styles.amenityChipIcon}>🧕</Text>
-                  <Text style={styles.amenityChipText}>Women's</Text>
+                <View style={[styles.amenityChip, { backgroundColor: theme.chipBg }]}>
+                  <MaterialCommunityIcons name="human-female" size={16} color={theme.chipText} />
+                  <Text style={[styles.amenityChipText, { color: theme.chipText }]}>Women's</Text>
                 </View>
               )}
               {crowdsourcedData.wheelchair && (
-                <View style={styles.amenityChip}>
-                  <Text style={styles.amenityChipIcon}>♿</Text>
-                  <Text style={styles.amenityChipText}>Access</Text>
+                <View style={[styles.amenityChip, { backgroundColor: theme.chipBg }]}>
+                  <MaterialCommunityIcons name="wheelchair-accessibility" size={16} color={theme.chipText} />
+                  <Text style={[styles.amenityChipText, { color: theme.chipText }]}>Access</Text>
                 </View>
               )}
               {crowdsourcedData.wudu && (
-                <View style={styles.amenityChip}>
-                  <Text style={styles.amenityChipIcon}>💧</Text>
-                  <Text style={styles.amenityChipText}>Wudu</Text>
+                <View style={[styles.amenityChip, { backgroundColor: theme.chipBg }]}>
+                  <MaterialCommunityIcons name="water" size={16} color={theme.chipText} />
+                  <Text style={[styles.amenityChipText, { color: theme.chipText }]}>Wudu</Text>
                 </View>
               )}
             </View>
           )}
-
+ 
           {/* ── Photo & Prayer Times Overlay ── */}
           <View style={styles.photoWrapper}>
             {photoUri ? (
               <Image source={{ uri: photoUri }} style={styles.photo} />
             ) : (
-              <View style={[styles.photoPlaceholder, activeCategory === 'food' && { backgroundColor: '#E8F5E9' }]}>
-                <Text style={styles.photoPlaceholderText}>{activeCategory === 'food' ? '🍴' : '🕌'}</Text>
+              <View style={[
+                styles.photoPlaceholder, 
+                { backgroundColor: theme.chipBg },
+                activeCategory === 'food' && { backgroundColor: theme.mode === 'dark' ? '#431407' : '#FFEDD5' }
+              ]}>
+                {activeCategory === 'food' ? (
+                  <MaterialCommunityIcons name="silverware-fork-knife" size={48} color={theme.mode === 'dark' ? '#fb923c' : '#EA580C'} />
+                ) : (
+                  <MaterialCommunityIcons name="mosque" size={48} color="#0D9488" />
+                )}
               </View>
             )}
-
+ 
             {/* Translucent Prayer Overlay fixed to bottom of image */}
             {activeCategory === 'mosque' && (
               <View style={styles.prayerOverlay}>
@@ -325,134 +343,140 @@ const MosqueDetailSheet = React.forwardRef(
             </View>
             )}
           </View>
-
+ 
           {/* ── Next Prayer Notice ── */}
           {activeCategory === 'mosque' && nextPrayer && minsUntilPrayer !== null && (
-            <Text style={styles.nextPrayerNotice}>
+            <Text style={[styles.nextPrayerNotice, { color: theme.primary }]}>
               {nextPrayer.name} in {formatTimeDiff(minsUntilPrayer)}
             </Text>
           )}
-
+ 
           {/* ── Live Stats ── */}
-          <View style={styles.statsRow}>
+          <View style={[styles.statsRow, { backgroundColor: theme.background }]}>
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>🚗 Drive</Text>
-              <Text style={styles.statValue}>
+              <Ionicons name="car-outline" size={18} color="#3B82F6" style={{ marginRight: 6 }} />
+              <Text style={[styles.statValue, { color: theme.text }]}>
                 {estimatedTimes?.['driving-traffic'] ? `${estimatedTimes['driving-traffic']} min` : '—'}
               </Text>
             </View>
-            <View style={styles.statDivider} />
+            <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>🚶‍♂️ Walk</Text>
-              <Text style={styles.statValue}>
+              <Ionicons name="walk-outline" size={18} color="#F97316" style={{ marginRight: 6 }} />
+              <Text style={[styles.statValue, { color: theme.text }]}>
                 {estimatedTimes?.walking ? `${estimatedTimes.walking} min` : '—'}
               </Text>
             </View>
-            <View style={styles.statDivider} />
+            <View style={[styles.statDivider, { backgroundColor: theme.border }]} />
             <View style={styles.statBox}>
-              <Text style={styles.statLabel}>🚇 Transit</Text>
-              <Text style={styles.statValue}>
+              <Ionicons name="subway-outline" size={18} color="#8B5CF6" style={{ marginRight: 6 }} />
+              <Text style={[styles.statValue, { color: theme.text }]}>
                 {estimatedTimes?.transit ? `${estimatedTimes.transit} min` : '—'}
               </Text>
             </View>
           </View>
-
+ 
           {/* ── Action Buttons ── */}
           <View style={styles.actionBar}>
             <TouchableOpacity
-              style={styles.actionBtn}
+              style={[styles.actionBtn, { backgroundColor: theme.background }]}
               onPress={handleInfo}
               activeOpacity={0.7}
             >
-              <Text style={styles.actionIcon}>ℹ️</Text>
-              <Text style={styles.actionLabel}>Info</Text>
+              <Ionicons name="information-circle-outline" size={24} color="#0284C7" style={{ marginBottom: 4 }} />
+              <Text style={[styles.actionLabel, { color: theme.text }]}>Info</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.actionBtn}
+              style={[styles.actionBtn, { backgroundColor: theme.background }]}
               onPress={handleWebsite}
               activeOpacity={0.7}
             >
-              <Text style={styles.actionIcon}>🌐</Text>
-              <Text style={styles.actionLabel}>Website</Text>
+              <Ionicons name="globe-outline" size={24} color="#2563EB" style={{ marginBottom: 4 }} />
+              <Text style={[styles.actionLabel, { color: theme.text }]}>Website</Text>
             </TouchableOpacity>
             {onShowOnMap && (
               <TouchableOpacity
-                style={styles.actionBtn}
+                style={[styles.actionBtn, { backgroundColor: theme.background }]}
                 onPress={onShowOnMap}
                 activeOpacity={0.7}
               >
-                <Text style={styles.actionIcon}>📍</Text>
-                <Text style={styles.actionLabel}>Map</Text>
+                <Ionicons name="location-outline" size={24} color="#F43F5E" style={{ marginBottom: 4 }} />
+                <Text style={[styles.actionLabel, { color: theme.text }]}>Map</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[styles.actionBtn, styles.navBtn]}
+              style={[styles.actionBtn, styles.navBtn, { backgroundColor: theme.primary }]}
               onPress={handleNavigate}
               activeOpacity={0.7}
             >
-              <Text style={styles.actionIcon}>🗺️</Text>
+              <Ionicons name="navigate-outline" size={24} color="#fff" style={{ marginBottom: 4 }} />
               <Text style={[styles.actionLabel, styles.navLabel]}>
                 Directions
               </Text>
             </TouchableOpacity>
           </View>
-
+ 
           {/* ── Opening Hours ── */}
-          <View style={[styles.card, { backgroundColor: theme.card }]}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardIcon}>🕐</Text>
-              <Text style={[styles.cardTitle, { color: theme.text }]}>Opening Hours</Text>
-              {deepLoading && (
-                <ActivityIndicator size="small" color={theme.primary} />
+          {(deepLoading || weekdayText) && (
+            <View style={[styles.card, { backgroundColor: theme.card }]}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="time-outline" size={20} color="#F59E0B" style={{ marginRight: 6 }} />
+                <Text style={[styles.cardTitle, { color: theme.text }]}>Opening Hours</Text>
+                {deepLoading && (
+                  <ActivityIndicator size="small" color={theme.primary} />
+                )}
+              </View>
+              {weekdayText && (
+                <>
+                  <TouchableOpacity
+                    onPress={() => setHoursExpanded(!hoursExpanded)}
+                    style={styles.hoursToggle}
+                  >
+                    <Text style={[styles.hoursToggleText, { color: theme.text }]}>
+                      {hoursExpanded ? 'Hide hours ▲' : 'Show full hours ▼'}
+                    </Text>
+                  </TouchableOpacity>
+                  {hoursExpanded &&
+                    weekdayText.map((line, idx) => (
+                      <Text key={idx} style={[styles.hourLine, { color: theme.text }]}>
+                        {line}
+                      </Text>
+                    ))}
+                </>
               )}
             </View>
-            {weekdayText && (
-              <>
-                <TouchableOpacity
-                  onPress={() => setHoursExpanded(!hoursExpanded)}
-                  style={styles.hoursToggle}
-                >
-                  <Text style={[styles.hoursToggleText, { color: theme.tint }]}>
-                    {hoursExpanded ? 'Hide hours ▲' : 'Show full hours ▼'}
-                  </Text>
-                </TouchableOpacity>
-                {hoursExpanded &&
-                  weekdayText.map((line, idx) => (
-                    <Text key={idx} style={[styles.hourLine, { color: theme.subText }]}>
-                      {line}
-                    </Text>
-                  ))}
-              </>
-            )}
-            {!deepLoading && !weekdayText && (
-              <Text style={[styles.noDataText, { color: theme.subText }]}>Hours not available</Text>
-            )}
-          </View>
-
+          )}
+ 
           {/* ── Nearby Transport ── */}
-          <View style={[styles.card, { backgroundColor: theme.card }]}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardIcon}>🚇</Text>
-              <Text style={[styles.cardTitle, { color: theme.text }]}>Nearby Transport</Text>
+          {(deepLoading || nearbyTransit.length > 0) && (
+            <View style={[styles.card, { backgroundColor: theme.card }]}>
+              <View style={styles.cardHeader}>
+                <Ionicons name="subway-outline" size={20} color="#8B5CF6" style={{ marginRight: 6 }} />
+                <Text style={[styles.cardTitle, { color: theme.text }]}>Nearby Transport</Text>
+                {deepLoading && (
+                  <ActivityIndicator size="small" color={theme.primary} />
+                )}
+              </View>
+              {nearbyTransit.length > 0 &&
+                nearbyTransit.map((station, idx) => (
+                  <View key={idx} style={[styles.transitRow, { borderBottomColor: theme.border }]}>
+                    <Text style={[styles.transitName, { color: theme.text }]}>{station.name}</Text>
+                    <Text style={[styles.transitDist, { color: theme.subText }]}>{station.distance} m</Text>
+                  </View>
+                ))
+              }
             </View>
-            {deepLoading ? (
-              <ActivityIndicator size="small" color={theme.primary} style={{ marginVertical: 8 }} />
-            ) : nearbyTransit.length > 0 ? (
-              nearbyTransit.map((station, idx) => (
-                <View key={idx} style={[styles.transitRow, { borderBottomColor: theme.border }]}>
-                  <Text style={[styles.transitName, { color: theme.text }]}>{station.name}</Text>
-                  <Text style={[styles.transitDist, { color: theme.subText }]}>{station.distance} m</Text>
-                </View>
-              ))
-            ) : (
-              <Text style={[styles.noDataText, { color: theme.subText }]}>No stations within 1 mi</Text>
-            )}
-          </View>
+          )}
 
           {/* ── Cross-Pollination CTA (Open List View) ── */}
           <View style={[styles.sectionDivider, { backgroundColor: theme.border }]} />
           <TouchableOpacity 
-            style={[styles.crossNavigateBtn, { backgroundColor: theme.card, borderColor: theme.border }]}
+            style={[
+              styles.crossNavigateBtn, 
+              { 
+                backgroundColor: ctaBgColor, 
+                borderColor: ctaBorderColor
+              }
+            ]}
             activeOpacity={0.8}
             onPress={async () => {
               if (!mosque) return;
@@ -471,12 +495,16 @@ const MosqueDetailSheet = React.forwardRef(
             }}
           >
             <View style={styles.crossNavigateContent}>
-              <Text style={styles.crossNavigateIcon}>{activeCategory === 'mosque' ? '🍴' : '🕌'}</Text>
-              <Text style={[styles.crossNavigateText, { color: theme.text }]}>
+              {activeCategory === 'mosque' ? (
+                <MaterialCommunityIcons name="silverware-fork-knife" size={24} color={ctaColor} style={{ marginRight: 8 }} />
+              ) : (
+                <MaterialCommunityIcons name="mosque" size={24} color={ctaColor} style={{ marginRight: 8 }} />
+              )}
+              <Text style={[styles.crossNavigateText, { color: ctaColor }]}>
                 {activeCategory === 'mosque' ? 'Find Halal Food Nearby' : 'Find Nearby Mosques'}
               </Text>
             </View>
-            <Text style={[styles.crossNavigateArrow, { color: theme.subText }]}>→</Text>
+            <Ionicons name="arrow-forward" size={20} color={ctaColor} />
           </TouchableOpacity>
           </>
           ) : null}
@@ -515,7 +543,7 @@ const styles = StyleSheet.create({
   },
   contentContainer: {
     paddingHorizontal: 20,
-    paddingBottom: 50,
+    paddingBottom: 16,
   },
 
   // Header
@@ -612,7 +640,7 @@ const styles = StyleSheet.create({
   // Photo
   photoWrapper: {
     width: '100%',
-    height: 190,
+    height: 250,
     marginBottom: 16,
     borderRadius: 14,
     overflow: 'hidden',
@@ -662,10 +690,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 8,
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   prayerColActive: {
     backgroundColor: 'rgba(74, 222, 128, 0.2)', // faint green bg
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   prayerOverlayName: {
     color: '#ccc',
@@ -698,8 +729,8 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     alignItems: 'center',
   },
-  statBox: { flex: 1, alignItems: 'center' },
-  statDivider: { width: 1, height: 30, backgroundColor: '#e0e0e0' },
+  statBox: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  statDivider: { width: 1, height: 20, backgroundColor: '#e0e0e0' },
   statLabel: { fontSize: 11, color: '#999', marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5 },
   statValue: { fontSize: 17, fontWeight: 'bold', color: '#111' },
   nextPrayerNotice: { fontSize: 14, color: '#2e7d32', fontWeight: '600', textAlign: 'center', marginBottom: 8 },
@@ -783,7 +814,8 @@ const styles = StyleSheet.create({
   sectionDivider: {
     height: 1,
     backgroundColor: '#E2E8F0',
-    marginVertical: 16,
+    marginTop: 6,
+    marginBottom: 12,
   },
   crossNavigateBtn: {
     flexDirection: 'row',
@@ -794,7 +826,7 @@ const styles = StyleSheet.create({
     borderColor: '#E2E8F0',
     borderRadius: 16,
     padding: 16,
-    marginBottom: 24,
+    marginBottom: 8,
   },
   crossNavigateContent: {
     flexDirection: 'row',

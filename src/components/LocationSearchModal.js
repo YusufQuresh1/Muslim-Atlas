@@ -1,4 +1,4 @@
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, Modal, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { useTheme } from '../context/ThemeContext';
@@ -99,7 +99,13 @@ export default function LocationSearchModal({ visible, onClose, onSelect }) {
         style={styles.resultItem} 
         onPress={() => handleSelectPrediction(item)}
       >
-        <Text style={styles.icon}>{isMosque ? '🕌' : '📍'}</Text>
+        <View style={styles.iconContainer}>
+          {isMosque ? (
+            <MaterialCommunityIcons name="mosque" size={24} color={theme.primary} />
+          ) : (
+            <Ionicons name="location-sharp" size={24} color={theme.primary} />
+          )}
+        </View>
         <View style={styles.resultTextContainer}>
           <Text style={[styles.mainText, { color: theme.text }]} numberOfLines={1}>{mainText}</Text>
           {secondaryText ? (
@@ -212,9 +218,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0,0,0,0.05)',
   },
-  icon: {
-    fontSize: 24,
+  iconContainer: {
     marginRight: 16,
+    width: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   resultTextContainer: {
     flex: 1,

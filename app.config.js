@@ -5,6 +5,11 @@ export default {
     name: 'Muslim Atlas',
     slug: 'muslim-atlas',
     version: '1.0.0',
+    extra: {
+      eas: {
+        projectId: '20433b8b-bf61-4ff8-8c7d-e63727a570b5',
+      },
+    },
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'light',
@@ -54,6 +59,23 @@ export default {
           ios: {
             useFrameworks: 'static',
           },
+        },
+      ],
+      [
+        'react-native-android-widget',
+        {
+          widgets: [
+            {
+              name: 'PrayerWidget',
+              label: 'Muslim Atlas Prayer Times',
+              minWidth: '250dp',
+              minHeight: '110dp',
+              targetCellWidth: 4,
+              targetCellHeight: 2,
+              updatePeriodMillis: 1800000,
+              description: "Today's prayer times for Muslim Atlas",
+            },
+          ],
         },
       ],
     ],

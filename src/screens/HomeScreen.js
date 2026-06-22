@@ -6,15 +6,23 @@ import { MosqueContext } from '../context/MosqueContext';
 import { useTheme } from '../context/ThemeContext';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
+import { calculatePrayerTimes } from '../utils/prayerEngine';
+import { usePrayerSettings } from '../context/PrayerSettingsContext';
+import { WidgetPreview } from 'react-native-android-widget';
+import { PrayerWidget } from '../widgets/PrayerWidget';
+import { updateAppWidgets } from '../../widget-task-handler';
 
 export default function HomeScreen({ navigation }) {
   const { userLocation, searchLocationName, isRefreshing, forceRefreshData } = React.useContext(MosqueContext);
   const { theme } = useTheme();
+  const { asrMethod, prayerOffsets, calculationMethod, highLatitudeRule } = usePrayerSettings();
   const [location, setLocation] = useState(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [prayerTimes, setPrayerTimes] = useState(null);
   const [prayerDate, setPrayerDate] = useState(null);
+  const [timezone, setTimezone] = useState(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [apiTimings, setApiTimings] = useState(null);
 
   // Real-time tick for prayer logic & UI clock
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -77,18 +85,45 @@ export default function HomeScreen({ navigation }) {
     })();
   }, []);
 
+  // Recalculate local prayer times whenever location, custom settings or the date changes
+  useEffect(() => {
+    const activeLoc = location || userLocation;
+    if (activeLoc) {
+      const lat = activeLoc.coords.latitude;
+      const lng = activeLoc.coords.longitude;
+      const times = calculatePrayerTimes(lat, lng, currentTime, {
+        asrMethod,
+        prayerOffsets,
+        calculationMethod,
+        highLatitudeRule,
+        timeZone: timezone,
+      });
+      setPrayerTimes(times);
+      updateAppWidgets().catch(console.error);
+    }
+  }, [location, userLocation, asrMethod, prayerOffsets, calculationMethod, highLatitudeRule, timezone, currentTime.getDate()]);
+
   const fetchPrayerTimes = async (lat, lng) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10000);
     try {
+      const today = new Date();
+      const day = String(today.getDate()).padStart(2, '0');
+      const month = String(today.getMonth() + 1).padStart(2, '0');
+      const year = today.getFullYear();
+      const dateStr = `${day}-${month}-${year}`;
+
       const res = await fetch(
-        `https://api.aladhan.com/v1/timings?latitude=${lat}&longitude=${lng}&method=2`,
+        `https://api.aladhan.com/v1/timings/${dateStr}?latitude=${lat}&longitude=${lng}&method=2`,
         { signal: controller.signal }
       );
       const data = await res.json();
       if (data && data.data) {
-        if (data.data.timings) setPrayerTimes(data.data.timings);
         if (data.data.date) setPrayerDate(data.data.date);
+        if (data.data.timings) setApiTimings(data.data.timings);
+        if (data.data.meta?.timezone) {
+          setTimezone(data.data.meta.timezone);
+        }
       }
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -96,16 +131,28 @@ export default function HomeScreen({ navigation }) {
       }
     } finally {
       clearTimeout(timeout);
+      const times = calculatePrayerTimes(lat, lng, currentTime, {
+        asrMethod,
+        prayerOffsets,
+        calculationMethod,
+        highLatitudeRule,
+        timeZone: timezone,
+      });
+      setPrayerTimes(times);
     }
   };
 
   const renderPrayerCard = () => {
     if (!prayerTimes) return null;
+
+    const activeSunrise = apiTimings?.Sunrise ? apiTimings.Sunrise.split(' ')[0] : prayerTimes.Sunrise.split(' ')[0];
+    const activeMaghrib = apiTimings?.Maghrib ? apiTimings.Maghrib.split(' ')[0] : prayerTimes.Maghrib.split(' ')[0];
+
     const prayers = [
       { name: 'Fajr', time: prayerTimes.Fajr },
       { name: 'Dhuhr', time: prayerTimes.Dhuhr },
       { name: 'Asr', time: prayerTimes.Asr },
-      { name: 'Maghrib', time: prayerTimes.Maghrib },
+      { name: 'Maghrib', time: activeMaghrib },
       { name: 'Isha', time: prayerTimes.Isha }
     ];
 
@@ -127,6 +174,7 @@ export default function HomeScreen({ navigation }) {
 
     let activeIndex = -1;
     if (currentMs >= fajrMs && currentMs < sunriseMs) activeIndex = 0;
+    else if (currentMs >= sunriseMs && currentMs < dhuhrMs) activeIndex = 1; // Sunrise -> Dhuhr highlights Dhuhr next
     else if (currentMs >= dhuhrMs && currentMs < asrMs) activeIndex = 1;
     else if (currentMs >= asrMs && currentMs < maghribMs) activeIndex = 2;
     else if (currentMs >= maghribMs && currentMs < ishaMs) activeIndex = 3;
@@ -160,7 +208,7 @@ export default function HomeScreen({ navigation }) {
             </Text>
             <View style={[styles.sunrisePill, { backgroundColor: 'rgba(255,255,255,0.15)' }]}>
               <Text style={styles.sunriseText}>
-                <Ionicons name="sunny-outline" size={12} color="#fff" /> Sunrise {prayerTimes.Sunrise.split(' ')[0]}
+                <Ionicons name="sunny-outline" size={12} color="#fff" /> Sunrise {activeSunrise}
               </Text>
             </View>
           </View>
@@ -182,6 +230,51 @@ export default function HomeScreen({ navigation }) {
       </LinearGradient>
     );
   };
+
+  const renderWidgetPreview = React.useCallback(() => {
+    if (!prayerTimes) return null;
+
+    const overriddenTimes = {
+      ...prayerTimes,
+      ...(apiTimings ? { Sunrise: apiTimings.Sunrise, Maghrib: apiTimings.Maghrib } : {})
+    };
+
+    const getMs = (timeString) => {
+      if (!timeString) return 0;
+      const timeStr = timeString.split(' ')[0];
+      if (!timeStr || !timeStr.includes(':')) return 0;
+      const [h, m] = timeStr.split(':').map(Number);
+      return (isNaN(h) || isNaN(m)) ? 0 : h * 60 + m;
+    };
+
+    const currentMs = currentTime.getHours() * 60 + currentTime.getMinutes();
+    const widgetPrayers = [
+      { name: 'Fajr', ms: getMs(overriddenTimes.Fajr) },
+      { name: 'Sunrise', ms: getMs(overriddenTimes.Sunrise) },
+      { name: 'Dhuhr', ms: getMs(overriddenTimes.Dhuhr) },
+      { name: 'Asr', ms: getMs(overriddenTimes.Asr) },
+      { name: 'Maghrib', ms: getMs(overriddenTimes.Maghrib) },
+      { name: 'Isha', ms: getMs(overriddenTimes.Isha) },
+    ];
+
+    const nextWidgetPrayer = widgetPrayers.find(p => p.ms > currentMs);
+    const nextWidgetPrayerName = nextWidgetPrayer ? nextWidgetPrayer.name : 'Fajr';
+
+    let currentWidgetPrayer = [...widgetPrayers].reverse().find(p => currentMs >= p.ms);
+    if (!currentWidgetPrayer) {
+      currentWidgetPrayer = widgetPrayers[widgetPrayers.length - 1]; // Isha if before Fajr
+    }
+    const currentWidgetPrayerName = currentWidgetPrayer.name;
+
+    return (
+      <PrayerWidget
+        prayerTimes={overriddenTimes}
+        nextPrayerName={nextWidgetPrayerName}
+        currentPrayerName={currentWidgetPrayerName}
+        locationName={searchLocationName || 'Muslim Atlas'}
+      />
+    );
+  }, [prayerTimes, apiTimings, searchLocationName, currentTime.getHours(), currentTime.getMinutes()]);
 
   if (loading) {
     return (
@@ -223,6 +316,7 @@ export default function HomeScreen({ navigation }) {
     elevation: 6,
   };
 
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]} edges={['top']}>
       <ScrollView 
@@ -250,19 +344,18 @@ export default function HomeScreen({ navigation }) {
               style={[
                 styles.utilityCard, 
                 { 
-                  backgroundColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.05)' : theme.card, 
-                  borderColor: theme.mode === 'dark' ? 'rgba(255,255,255,0.1)' : u.color, 
-                  borderWidth: 2,
-                  // Vibrant themed shadows for light mode
+                  backgroundColor: u.color, 
+                  borderColor: u.color,
+                  borderWidth: 1,
                   ...Platform.select({
                     ios: {
-                      shadowColor: theme.mode === 'dark' ? '#000' : u.color,
+                      shadowColor: u.color,
                       shadowOffset: { width: 0, height: 4 },
-                      shadowOpacity: theme.mode === 'dark' ? 0.3 : 0.1,
+                      shadowOpacity: 0.2,
                       shadowRadius: 6,
                     },
                     android: {
-                      elevation: theme.mode === 'dark' ? 2 : 3,
+                      elevation: 3,
                     }
                   })
                 }
@@ -270,17 +363,17 @@ export default function HomeScreen({ navigation }) {
               activeOpacity={0.8}
               onPress={u.action}
             >
-              <View style={[styles.utilityIconWrapper, { backgroundColor: theme.mode === 'dark' ? u.color + '15' : 'transparent' }]}>
+              <View style={[styles.utilityIconWrapper, { backgroundColor: 'rgba(255,255,255,0.2)' }]}>
                 {u.type === 'ion' ? (
-                  <Ionicons name={u.icon} size={22} color={u.color} />
+                  <Ionicons name={u.icon} size={22} color="#ffffff" />
                 ) : (
-                  <MaterialCommunityIcons name={u.icon} size={22} color={u.color} />
+                  <MaterialCommunityIcons name={u.icon} size={22} color="#ffffff" />
                 )}
               </View>
               <Text 
                 style={[
                   styles.utilityTitle, 
-                  { color: theme.mode === 'dark' ? theme.text : u.color }
+                  { color: '#ffffff' }
                 ]} 
                 numberOfLines={1}
               >
@@ -309,8 +402,8 @@ export default function HomeScreen({ navigation }) {
                 style={styles.cardWatermark} 
               />
               <View style={styles.primaryIconContainer}>
-                <View style={styles.whiteIconBg}>
-                  <MaterialCommunityIcons name="mosque" size={30} color="#059669" />
+                <View style={[styles.whiteIconBg, { backgroundColor: '#A7F3D0' }]}>
+                  <MaterialCommunityIcons name="mosque" size={30} color="#065F46" />
                 </View>
               </View>
               <View style={styles.primaryTextContainer}>
@@ -339,8 +432,8 @@ export default function HomeScreen({ navigation }) {
                 style={styles.cardWatermark} 
               />
               <View style={styles.primaryIconContainer}>
-                <View style={styles.whiteIconBg}>
-                  <MaterialCommunityIcons name="silverware-fork-knife" size={30} color="#EA580C" />
+                <View style={[styles.whiteIconBg, { backgroundColor: '#FFEDD5' }]}>
+                  <MaterialCommunityIcons name="silverware-fork-knife" size={30} color="#9A3412" />
                 </View>
               </View>
               <View style={styles.primaryTextContainer}>
@@ -351,6 +444,19 @@ export default function HomeScreen({ navigation }) {
             </LinearGradient>
           </TouchableOpacity>
         </View>
+
+        {prayerTimes && (
+          <View style={{ paddingHorizontal: 20, marginBottom: 20, alignItems: 'center' }}>
+            <Text style={{ fontSize: 16, fontWeight: 'bold', color: theme.text, marginBottom: 12, alignSelf: 'flex-start' }}>
+              Widget Preview (4x2)
+            </Text>
+            <WidgetPreview
+              renderWidget={renderWidgetPreview}
+              width={320}
+              height={140}
+            />
+          </View>
+        )}
         
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -408,7 +514,7 @@ const styles = StyleSheet.create({
   prayerCardDivider: { height: 1, marginVertical: 12 },
   prayerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   prayerItem: { alignItems: 'center', paddingVertical: 10, paddingHorizontal: 6, borderRadius: 16, flex: 1 },
-  prayerItemActive: { backgroundColor: 'rgba(255,255,255,0.2)' },
+  prayerItemActive: { backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 16, overflow: 'hidden' },
   prayerName: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginBottom: 4, fontWeight: '700' },
   prayerNameActive: { color: '#fff' },
   prayerTime: { fontSize: 15, fontWeight: '700', color: 'rgba(255,255,255,0.9)' },
@@ -482,7 +588,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.02)',
-    borderRadius: 12,
+    borderRadius: 20,
     marginBottom: 6,
   },
   utilityTitle: {

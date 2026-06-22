@@ -96,18 +96,29 @@ const MosqueExtendedInfoModal = ({ visible, onClose, mosque, crowdsourcedData })
        return null;
     }
 
+    const voteColor = hasVoted ? theme.subText : (theme.mode === 'dark' ? '#93c5fd' : '#2563eb');
+
     return (
       <View style={styles.trustScoreRow}>
         <Text style={[styles.amenityValue, isAvailable ? styles.valueYes : styles.valueNo]}>
           {isAvailable ? 'Available' : 'Not Available'}
         </Text>
-        <Text style={styles.trustScoreText}> • Confirmed by {confirmations}</Text>
+        <Text style={[styles.trustScoreText, { color: theme.subText }]}> • Confirmed by {confirmations}</Text>
         <TouchableOpacity 
-          style={[styles.confirmBtn, hasVoted && styles.confirmBtnDisabled]} 
+          style={[
+            styles.confirmBtn, 
+            { 
+              backgroundColor: theme.mode === 'dark' ? '#1e3a8a' : '#eff6ff', 
+              borderColor: theme.mode === 'dark' ? '#3b82f6' : '#bfdbfe' 
+            }, 
+            hasVoted && { backgroundColor: theme.chipBg, borderColor: theme.border }
+          ]} 
           onPress={() => handleConfirm(fieldKey, isAvailable)}
           disabled={hasVoted}
         >
-          <Text style={[styles.confirmBtnText, hasVoted && styles.confirmBtnTextDisabled]}><Ionicons name="thumbs-up-outline" size={14} color={hasVoted ? "#9CA3AF" : "#fff"} /> Confirm</Text>
+          <Text style={[styles.confirmBtnText, { color: voteColor }]}>
+            <Ionicons name="thumbs-up-outline" size={14} color={voteColor} /> Confirm
+          </Text>
         </TouchableOpacity>
       </View>
     );
@@ -145,67 +156,67 @@ const MosqueExtendedInfoModal = ({ visible, onClose, mosque, crowdsourcedData })
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={[styles.container, { paddingTop: Platform.OS === 'android' ? insets.top : 0 }]}>
-        <View style={styles.header}>
-          <Text style={styles.headerTitle} numberOfLines={1}>{mosque.displayName?.text} Info</Text>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>✕</Text>
+      <View style={[styles.container, { paddingTop: Platform.OS === 'android' ? insets.top : 0, backgroundColor: theme.background }]}>
+        <View style={[styles.header, { backgroundColor: theme.card, borderBottomColor: theme.border }]}>
+          <Text style={[styles.headerTitle, { color: theme.text }]} numberOfLines={1}>{mosque.displayName?.text} Info</Text>
+          <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: theme.chipBg }]}>
+            <Text style={[styles.closeBtnText, { color: theme.text }]}>✕</Text>
           </TouchableOpacity>
         </View>
 
         <ScrollView contentContainerStyle={styles.content}>
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Amenities</Text>
+          <View style={[styles.section, { backgroundColor: theme.card }]}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Amenities</Text>
             
-            <View style={styles.amenityRow}>
+            <View style={[styles.amenityRow, { borderBottomColor: theme.border }]}>
                <MaterialCommunityIcons name="human-male-female" size={24} color={theme.text} style={styles.amenityIcon} />
               <View style={styles.amenityTextContainer}>
-                <Text style={styles.amenityLabel}>Women's Section</Text>
+                <Text style={[styles.amenityLabel, { color: theme.text }]}>Women's Section</Text>
                 {renderTrustScore('hasWomens', getFieldValue('hasWomens'))}
               </View>
             </View>
 
-            <View style={styles.amenityRow}>
+            <View style={[styles.amenityRow, { borderBottomColor: theme.border }]}>
                <Ionicons name="accessibility-outline" size={24} color={theme.text} style={styles.amenityIcon} />
               <View style={styles.amenityTextContainer}>
-                <Text style={styles.amenityLabel}>Wheelchair Accessible</Text>
+                <Text style={[styles.amenityLabel, { color: theme.text }]}>Wheelchair Accessible</Text>
                 {renderTrustScore('wheelchair', getFieldValue('wheelchair'))}
               </View>
             </View>
 
-            <View style={styles.amenityRow}>
+            <View style={[styles.amenityRow, { borderBottomColor: theme.border }]}>
                 <MaterialCommunityIcons name="water-outline" size={24} color={theme.text} style={styles.amenityIcon} />
               <View style={styles.amenityTextContainer}>
-                <Text style={styles.amenityLabel}>Wudu Facilities</Text>
+                <Text style={[styles.amenityLabel, { color: theme.text }]}>Wudu Facilities</Text>
                 {renderTrustScore('wudu', getFieldValue('wudu'))}
               </View>
             </View>
           </View>
 
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Jummah Times</Text>
+          <View style={[styles.section, { backgroundColor: theme.card }]}>
+            <Text style={[styles.sectionTitle, { color: theme.text }]}>Jummah Times</Text>
             {crowdsourcedData?.jummahTimes?.length > 0 ? (
               crowdsourcedData.jummahTimes.map((time, idx) => (
-                <View key={idx} style={styles.timeRow}>
+                <View key={idx} style={[styles.timeRow, { borderBottomColor: theme.border }]}>
                   <MaterialCommunityIcons name="mosque" size={20} color={theme.text} style={styles.timeIcon} />
-                  <Text style={styles.timeText}>{time}</Text>
+                  <Text style={[styles.timeText, { color: theme.text }]}>{time}</Text>
                 </View>
               ))
             ) : (
-              <Text style={styles.noDataText}>No Jummah times available</Text>
+              <Text style={[styles.noDataText, { color: theme.subText }]}>No Jummah times available</Text>
             )}
           </View>
 
           <View style={styles.ctaContainer}>
-            <View style={styles.ctaMainBlock}>
-              <Text style={styles.ctaSubtitle}>Know this place? Help the community by filling in missing info.</Text>
-              <TouchableOpacity style={styles.ctaButton} onPress={handleAnswerQuestions} activeOpacity={0.8}>
+            <View style={[styles.ctaMainBlock, { backgroundColor: theme.card }]}>
+              <Text style={[styles.ctaSubtitle, { color: theme.subText }]}>Know this place? Help the community by filling in missing info.</Text>
+              <TouchableOpacity style={[styles.ctaButton, { backgroundColor: theme.primary }]} onPress={handleAnswerQuestions} activeOpacity={0.8}>
                 <Text style={styles.ctaButtonText}>Answer quick questions</Text>
               </TouchableOpacity>
             </View>
             
             <TouchableOpacity onPress={handleSuggestEdit} style={styles.secondaryCtaBtn} activeOpacity={0.6}>
-              <Text style={styles.secondaryCtaText}>Spot an error? Suggest an edit.</Text>
+              <Text style={[styles.secondaryCtaText, { color: theme.subText }]}>Spot an error? Suggest an edit.</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>

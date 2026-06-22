@@ -14,6 +14,7 @@ import SettingsScreen from './src/components/SettingsScreen';
 import { MosqueProvider } from './src/context/MosqueContext';
 import { AuthProvider } from './src/context/AuthContext';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
+import { PrayerSettingsProvider } from './src/context/PrayerSettingsContext';
 import Mapbox from '@rnmapbox/maps';
 
 Mapbox.setAccessToken(process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN);
@@ -100,13 +101,15 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
-        <AuthProvider>
-          <MosqueProvider>
-            <SafeAreaProvider>
-              <MainNavigator />
-            </SafeAreaProvider>
-          </MosqueProvider>
-        </AuthProvider>
+        <PrayerSettingsProvider>
+          <AuthProvider>
+            <MosqueProvider>
+              <SafeAreaProvider>
+                <MainNavigator />
+              </SafeAreaProvider>
+            </MosqueProvider>
+          </AuthProvider>
+        </PrayerSettingsProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );

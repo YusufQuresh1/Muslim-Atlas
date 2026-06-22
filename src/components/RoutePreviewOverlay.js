@@ -34,9 +34,9 @@ function formatTimeDiff(totalMins) {
 }
 
 const MODES = [
-  { key: 'driving-traffic', label: 'Drive',   icon: '🚗' },
-  { key: 'walking',         label: 'Walk',    icon: '🚶' },
-  { key: 'transit',         label: 'Transit', icon: '🚇' },
+  { key: 'driving-traffic', label: 'Drive',   iconName: 'car-outline' },
+  { key: 'walking',         label: 'Walk',    icon: 'walk-outline', iconName: 'walk-outline' },
+  { key: 'transit',         label: 'Transit', iconName: 'subway-outline' },
 ];
 
 export default function RoutePreviewOverlay({
@@ -57,6 +57,7 @@ export default function RoutePreviewOverlay({
   nextPrayer,
 }) {
   const insets = useSafeAreaInsets();
+  const { theme } = useTheme();
   const { appendParkingToCache, fetchMosqueDeepData } = useContext(MosqueContext);
 
   const [parkingLots, setParkingLots] = useState([]);
