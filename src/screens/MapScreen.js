@@ -1039,23 +1039,19 @@ export default function MapScreen({ route, navigation }) {
                 const lat = item.location?.latitude || item.geometry?.location?.lat;
 
                 return (
-                <Mapbox.MarkerView
-                  key={`mv-${activeCategory}-${item.id || item.place_id || index.toString()}`}
-                  id={`mv-${activeCategory}-${item.id || index}`}
+                <Mapbox.PointAnnotation
+                  key={`pa-${activeCategory}-${item.id || item.place_id || index.toString()}`}
+                  id={`pa-${activeCategory}-${item.id || index}`}
                   coordinate={[lng, lat]}
-                  allowOverlap
+                  onSelected={() => openPlaceSheet(item)}
                 >
-                  <TouchableOpacity
-                    activeOpacity={0.7}
-                    onPress={() => openPlaceSheet(item)}
-                    style={styles.markerWrapper}
-                  >
+                  <View style={styles.markerWrapper}>
                     <View style={[styles.marker, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]}>
                       <MaterialCommunityIcons name={activeCategory === 'food' ? 'silverware-fork-knife' : 'mosque'} size={18} color='#fff' />
                     </View>
                     <View style={[styles.markerStem, activeCategory === 'food' ? { backgroundColor: '#B5651D' } : {}]} />
-                  </TouchableOpacity>
-                </Mapbox.MarkerView>
+                  </View>
+                </Mapbox.PointAnnotation>
               )})}
 
             {/* Drive/transit route line */}
