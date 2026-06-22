@@ -182,7 +182,7 @@ export default function HomeScreen({ navigation }) {
 
     return (
       <LinearGradient 
-        colors={['#0369a1', '#075985']} 
+        colors={['#0369a1', '#0f172a']} 
         start={{ x: 0, y: 0 }} 
         end={{ x: 1, y: 1 }} 
         style={styles.prayerCard}

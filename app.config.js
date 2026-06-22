@@ -25,7 +25,7 @@ export default {
     android: {
       adaptiveIcon: {
         foregroundImage: './assets/adaptive-icon.png',
-        backgroundColor: '#ffffff',
+        backgroundColor: '#a5d6a7',
       },
       edgeToEdgeEnabled: true,
       package: 'com.anonymous.MosqueMap',

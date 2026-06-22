@@ -69,20 +69,20 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
         borderRadius: 18,
         paddingLeft: 16,
         paddingRight: 16,
-        paddingTop: 12,
-        paddingBottom: 12,
+        paddingTop: 10,
+        paddingBottom: 8,
         flexDirection: 'column',
         justifyContent: 'space-between',
       }}
     >
-      {/* Header Info (Top 2/3rds) */}
+      {/* Header Info (Top section) */}
       <FlexWidget
         style={{
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
           width: 'match_parent',
-          flex: 2,
+          flex: 1.7,
         }}
       >
         {/* Left Side: Meta Info */}
@@ -181,19 +181,19 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
           height: 1,
           width: 'match_parent',
           backgroundColor: '#ffffff33',
-          marginTop: 6,
-          marginBottom: 6,
+          marginTop: 3,
+          marginBottom: 3,
         }}
       />
  
-      {/* Grid of 5 prayer times (Bottom 1/3rd) */}
+      {/* Grid of 5 prayer times (Bottom section) */}
       <FlexWidget
         style={{
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
           width: 'match_parent',
-          flex: 1,
+          flex: 1.3,
         }}
       >
         {prayers.map((p, index) => {
@@ -205,8 +205,8 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                paddingTop: 4,
-                paddingBottom: 4,
+                paddingTop: 2,
+                paddingBottom: 2,
                 paddingLeft: 2,
                 paddingRight: 2,
                 borderRadius: 10,
