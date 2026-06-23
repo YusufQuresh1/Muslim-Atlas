@@ -16,7 +16,7 @@ import { useTheme } from '../context/ThemeContext';
 import { usePrayerSettings } from '../context/PrayerSettingsContext';
 import LoginModal from './LoginModal';
 
-const SUPPORT_URL = 'https://buymeacoffee.com/mosquemap'; // Placeholder
+const SUPPORT_URL = 'https://buymeacoffee.com/muslimatlas';
 
 const CALC_METHODS = [
   { label: 'London Unified (UK)', value: 'LondonUnified' },
