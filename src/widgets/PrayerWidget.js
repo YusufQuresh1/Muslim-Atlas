@@ -69,43 +69,42 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
         borderRadius: 18,
         paddingLeft: 14,
         paddingRight: 14,
-        paddingTop: 6,
-        paddingBottom: 16,
+        paddingTop: 12,
+        paddingBottom: 12,
         flexDirection: 'column',
-        justifyContent: 'space-between',
+        justifyContent: 'flex-start',
       }}
     >
-      {/* Header Info (Top section - 1.4 flex) */}
+      {/* Header Info */}
       <FlexWidget
         style={{
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
           width: 'match_parent',
-          flex: 1.4,
         }}
       >
         {/* Left Side: Meta Info */}
-        <FlexWidget style={{ flexDirection: 'column', flex: 1.3, justifyContent: 'center' }}>
+        <FlexWidget style={{ flexDirection: 'column', flex: 1.2 }}>
           <TextWidget
             text="Muslim Atlas"
             style={{
-              fontSize: 17,
+              fontSize: 19,
               color: '#ffffff',
               fontFamily: 'sans-serif-bold',
               fontWeight: 'bold',
             }}
           />
-          <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+          <FlexWidget style={{ flexDirection: 'row', alignItems: 'center', marginTop: 3 }}>
             <SvgWidget
               svg={locationPinSvg}
-              style={{ width: 10, height: 10, marginRight: 3 }}
+              style={{ width: 11, height: 11, marginRight: 4 }}
             />
             <TextWidget
               text={locationName}
               style={{
-                fontSize: 11,
-                color: '#cbd5e1', // Slate-300
+                fontSize: 12,
+                color: '#e2e8f0', // Slate-200
                 fontFamily: 'sans-serif-medium',
                 fontWeight: 'bold',
               }}
@@ -114,19 +113,19 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
           <TextWidget
             text={dateLine}
             style={{
-              fontSize: 9,
+              fontSize: 10,
               color: '#bae6fd', // Sky-200
-              marginTop: 2,
+              marginTop: 3,
             }}
           />
         </FlexWidget>
  
         {/* Right Side: Active Tracker & Details */}
-        <FlexWidget style={{ flexDirection: 'column', alignItems: 'flex-end', flex: 0.7, justifyContent: 'center' }}>
+        <FlexWidget style={{ flexDirection: 'column', alignItems: 'flex-end', flex: 0.8 }}>
           <TextWidget
             text={currentPrayerName || '---'}
             style={{
-              fontSize: 22,
+              fontSize: 26,
               color: '#ffffff', // Bright white active prayer name
               fontFamily: 'sans-serif-bold',
               fontWeight: 'bold',
@@ -137,7 +136,7 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
             <TextWidget
               text={`${nextPrayerName} at ${nextPrayerTimeStr}`}
               style={{
-                fontSize: 9,
+                fontSize: 10,
                 color: '#bae6fd',
                 marginTop: 1,
               }}
@@ -147,11 +146,11 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
           {/* Sunrise Pill */}
           <FlexWidget
             style={{
-              paddingTop: 1.5,
-              paddingBottom: 1.5,
-              paddingLeft: 5,
-              paddingRight: 5,
-              borderRadius: 5,
+              paddingTop: 2,
+              paddingBottom: 2,
+              paddingLeft: 6,
+              paddingRight: 6,
+              borderRadius: 6,
               backgroundColor: '#ffffff26', // rgba(255,255,255,0.15)
               marginTop: 3,
               flexDirection: 'row',
@@ -160,7 +159,7 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
           >
             <SvgWidget
               svg={sunIconSvg}
-              style={{ width: 9, height: 9, marginRight: 2 }}
+              style={{ width: 9, height: 9, marginRight: 3 }}
             />
             <TextWidget
               text={`Sunrise ${prayerTimes.Sunrise ? prayerTimes.Sunrise.split(' ')[0] : '--:--'}`}
@@ -181,19 +180,18 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
           height: 1,
           width: 'match_parent',
           backgroundColor: '#ffffff33',
-          marginTop: 2,
-          marginBottom: 2,
+          marginTop: 8,
+          marginBottom: 8,
         }}
       />
  
-      {/* Grid of 5 prayer times (Bottom section - 1.6 flex) */}
+      {/* Grid of 5 prayer times */}
       <FlexWidget
         style={{
           flexDirection: 'row',
           justifyContent: 'space-between',
           alignItems: 'center',
           width: 'match_parent',
-          flex: 1.6,
         }}
       >
         {prayers.map((p, index) => {
@@ -205,21 +203,21 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
                 flexDirection: 'column',
                 alignItems: 'center',
                 justifyContent: 'center',
-                paddingTop: 2,
-                paddingBottom: 2,
-                paddingLeft: 1,
-                paddingRight: 1,
-                borderRadius: 8,
+                paddingTop: 6,
+                paddingBottom: 6,
+                paddingLeft: 2,
+                paddingRight: 2,
+                borderRadius: 10,
                 flex: 1,
-                marginLeft: 1.5,
-                marginRight: 1.5,
+                marginLeft: 2,
+                marginRight: 2,
                 ...(isCurrent ? { backgroundColor: '#ffffff33' } : {}),
               }}
             >
               <TextWidget
                 text={p.name}
                 style={{
-                  fontSize: 9,
+                  fontSize: 11,
                   color: isCurrent ? '#ffffff' : '#cbd5e1', // White vs Slate-300
                   textAlign: 'center',
                   fontFamily: 'sans-serif-bold',
@@ -229,12 +227,12 @@ export function PrayerWidget({ prayerTimes, nextPrayerName, currentPrayerName, l
               <TextWidget
                 text={p.time ? p.time.split(' ')[0] : '--:--'}
                 style={{
-                  fontSize: 12,
+                  fontSize: 15,
                   color: isCurrent ? '#ffffff' : '#f0f9ff', // White vs Sky-50
                   textAlign: 'center',
                   fontFamily: 'sans-serif-bold',
                   fontWeight: 'bold',
-                  marginTop: 1,
+                  marginTop: 2,
                 }}
               />
             </FlexWidget>
